@@ -50,7 +50,7 @@ export default function binaryMatrixAPI(context: Context, args: any) {
     /**
      * {
      *  turns: number, // elapsed turns
-     *  (a|l[0-5]): { // decks
+     *  l[0-5]: { // decks
      *    c: number, // number of cards
      *    t: cid | "X", // top card or "X" if hidden
      *  }
@@ -58,6 +58,7 @@ export default function binaryMatrixAPI(context: Context, args: any) {
      * h(d|a)[0-9a-f]: cid[] | number
      * [a|d][0-5]: (cid | `${cid}u` | "X")[], // attacker/defender stack, u is appended when card is visible for everyone
      * x[0-5a]: cid[], // discards
+     * a: number, // attacker deck size
      */
     any;
     plrs: // array of players in the format [pid, username]
@@ -131,16 +132,16 @@ export default function binaryMatrixAPI(context: Context, args: any) {
 
   type laneNum = 0 | 1 | 2 | 3 | 4 | 5;
   type playerNum =
-    | "0"
-    | "1"
-    | "2"
-    | "3"
-    | "4"
-    | "5"
-    | "6"
-    | "7"
-    | "8"
-    | "9"
+    | '0'
+    | '1'
+    | '2'
+    | '3'
+    | '4'
+    | '5'
+    | '6'
+    | '7'
+    | '8'
+    | '9'
     | 'a'
     | 'b'
     | 'c'
@@ -469,8 +470,98 @@ export default function binaryMatrixAPI(context: Context, args: any) {
     return nextPowerOfTwo;
   };
 
-  const toBrainState = (pid: pid, state: State): brainArgs => {
-    throw new Error('not implemented.');
+  const cardToCid = (c: Card) => c.value + c.sign;
+  const displayCards = (
+    cards: Card[],
+    isTeam: boolean = true,
+    isCombat: boolean = false,
+    force_visible: boolean = false
+  ) => {
+    let r = [];
+    for (let i = cards.length - 1; i > 0; i--) {
+      let card = cards[i];
+      if ((isCombat && card.up) || force_visible) r.push(cardToCid(card) + 'u');
+      else if (isTeam || card.up) r.push(cardToCid(card));
+      else r.push('X');
+    }
+    return r;
+  };
+
+  const toBrainState = (pid: pid, game: Game): brainArgs => {
+    const result: Partial<brainArgs> = {};
+    result.plr = pid;
+
+    let prevTurn = `${game.turn - 2} ---`;
+    result.ops = game.binlog.slice(game.binlog.indexOf(prevTurn));
+
+    result.plrs = game.players.map((el) => [el.id, el.username]);
+
+    result.s = {};
+    result.s.turns = game.turn - 1;
+
+    const state = game.state;
+    const hands = state.hands;
+
+    // attacker-specific things
+    let isAttacker = ['a', 't'].includes(pid[0]);
+
+    for (let i = 0; i < state.hands.attacker.length; i++) {
+      let hand = hands.attacker[i];
+      if (!hand)
+        throw new Error(
+          'typescript does not get thesse implied constraints, i < array.length means I _can_ index the array with i thanks'
+        );
+      result.s[`ha${decToHex(i)}`] = isAttacker
+        ? displayCards(hand)
+        : hand.length;
+    }
+
+    // defender-specific things
+    let isDefender = ['d', 't'].includes(pid[0]);
+    for (let i = 0; i < hands.defender.length; i++) {
+      let hand = hands.defender[i];
+      if (!hand)
+        throw new Error(
+          'typescript does not get thesse implied constraints, i < array.length means I _can_ index the array with i thanks'
+        );
+      result.s[`da${decToHex(i)}`] = isDefender
+        ? displayCards(hand)
+        : hand.length;
+    }
+
+    // general things
+    result.s.a = state.attackerDeck.length;
+    result.s.xa = displayCards(state.attackerDiscard);
+
+    for (let i = 0; i < 6; i++) {
+      const lane = state.lanes[i];
+
+      let topCard = lane.laneDeck[lane.laneDeck.length - 1];
+      result.s[`l${i}`] = {
+        t: topCard.up ? cardToCid(topCard) : 'X',
+        c: lane.laneDeck.length,
+      };
+
+      const as = lane.attackerStack;
+      const ds = lane.defenderStack;
+      result.s[`a${i}`] = displayCards(
+        as.cards,
+        isAttacker,
+        true,
+        as.force_visible
+      );
+      result.s[`d${i}`] = displayCards(
+        ds.cards,
+        isDefender,
+        true,
+        ds.force_visible
+      );
+
+      result.s[`x${i}`] = displayCards(lane.laneDiscard);
+    }
+    
+
+    return result as brainArgs
   };
 
   //#endregion helper functions
