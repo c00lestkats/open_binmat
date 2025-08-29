@@ -43,6 +43,28 @@ export default function binaryMatrixAPI(context: Context, args: any) {
       ];
     };
   }
+  interface brainArgs {
+    plr: // pid of current player,
+    pid;
+    s: //modified state, too lazy to ts define it since its rather complicated
+    /**
+     * {
+     *  turns: number, // elapsed turns
+     *  (a|l[0-5]): { // decks
+     *    c: number, // number of cards
+     *    t: cid | "X", // top card or "X" if hidden
+     *  }
+     * }
+     * h(d|a)[0-9a-f]: cid[] | number
+     * [a|d][0-5]: (cid | `${cid}u` | "X")[], // attacker/defender stack, u is appended when card is visible for everyone
+     * x[0-5a]: cid[], // discards
+     */
+    any;
+    plrs: // array of players in the format [pid, username]
+    [pid, string][];
+    ops: // binlog since last turn (of this player, so 2 turns)
+    string[];
+  }
   const cardValues: readonly [2, 3, 4, 5, 6, 7, 8, 9, 'a', '?', '>', '@', '*'] =
     [2, 3, 4, 5, 6, 7, 8, 9, 'a', '?', '>', '@', '*'];
   const cardSigns: readonly ['^', '+', '%', '&', '!', '#'] = [
@@ -58,19 +80,15 @@ export default function binaryMatrixAPI(context: Context, args: any) {
   interface Card {
     value: CardValues;
     sign: CardSigns;
-    visibility: 'a' | 'd' | 'n' | 'e';
+    up: boolean;
   }
-  interface PlayedCard extends Card {
-    visibility: 'a' | 'd' | 'e';
-  }
-  interface DeckCard extends Card {
-    visibility: 'n' | 'e';
-  }
+  interface PlayedCard extends Card {}
+  interface DeckCard extends Card {}
   interface DiscardedCard extends Card {
-    visibility: 'e';
+    up: true;
   }
   interface HandCard extends Card {
-    visibility: 'a' | 'd';
+    up: false;
   }
   type Stack<T> = T extends Card ? T[] : never;
   interface Lane {
@@ -81,7 +99,7 @@ export default function binaryMatrixAPI(context: Context, args: any) {
   }
   interface Player {
     username: string;
-    team: 'a' | 'd' | 's';
+    team: 'a' | 'd' | 's' | 't';
     id: pid; // a0, a1, d0 etc
     consecutiveNoOps: number;
   }
@@ -113,22 +131,22 @@ export default function binaryMatrixAPI(context: Context, args: any) {
 
   type laneNum = 0 | 1 | 2 | 3 | 4 | 5;
   type playerNum =
-    | 0
-    | 1
-    | 2
-    | 3
-    | 4
-    | 5
-    | 6
-    | 7
-    | 8
-    | 9
-    | 10
-    | 11
-    | 12
-    | 13
-    | 14
-    | 15;
+    | "0"
+    | "1"
+    | "2"
+    | "3"
+    | "4"
+    | "5"
+    | "6"
+    | "7"
+    | "8"
+    | "9"
+    | 'a'
+    | 'b'
+    | 'c'
+    | 'd'
+    | 'e'
+    | 'f';
 
   type attackerDeckLane = 6;
 
@@ -136,6 +154,9 @@ export default function binaryMatrixAPI(context: Context, args: any) {
   type cid = `${CardValues}${CardSigns}`;
 
   type CombatStack = { cards: Stack<PlayedCard>; force_visible: boolean };
+
+  const traceDefender = '100101111';
+  const traceAttacker = '101000000';
 
   //#endregion type definitions
   //#region randomness functions
@@ -250,15 +271,17 @@ export default function binaryMatrixAPI(context: Context, args: any) {
     const r = sfc32(seed);
     const rInt = (max: number): number => Math.floor(r() * max) + 1;
 
+    // create array if all cards in play
     const availibleCards: DeckCard[] = [];
     for (let v of cardValues) {
       for (let s of cardSigns) {
-        availibleCards.push({ value: v, sign: s, visibility: 'n' });
+        availibleCards.push({ value: v, sign: s, up: false });
       }
     }
 
     const lanes: Lane[] = [];
 
+    // create lanes
     for (let i = 0; i < 6; i++) {
       lanes[i] = {
         attackerStack: { cards: [], force_visible: false },
@@ -268,6 +291,7 @@ export default function binaryMatrixAPI(context: Context, args: any) {
       };
     }
 
+    // fill cards into lanes, randomly based on seed
     while (availibleCards.length > 0) {
       let card: DeckCard = availibleCards[rInt(availibleCards.length - 1)];
       let availibleLanes: Lane[] = lanes.filter(
@@ -276,6 +300,12 @@ export default function binaryMatrixAPI(context: Context, args: any) {
 
       availibleLanes[rInt(availibleLanes.length - 1)].laneDeck.push(card);
     }
+    // turn top card in lanes 3-5 up
+    for (let i = 3; i < 6; i++) {
+      lanes[i].laneDeck[0].up = true;
+    }
+
+    // put together state
     const boardState: State = {
       lanes: lanes as [Lane, Lane, Lane, Lane, Lane, Lane],
       attackerDeck: [],
@@ -315,14 +345,17 @@ export default function binaryMatrixAPI(context: Context, args: any) {
     return arr.sort(() => r() - 0.5);
   }
 
-  const getPlayerPathByPid = (
+  const decToHex = (num: number) => num.toString(16);
+  const hexToDec = (num: string) => parseInt(num, 16);
+
+  const splitPid = (
     pid: pid
   ): { team: 'a' | 'd'; teamlong: 'attacker' | 'defender'; num: playerNum } => {
     if (!(pid[0] === 'a' || pid[0] === 'd'))
       throw new Error('illegal player id');
 
     const _team = pid[0] === 'a' ? 'attacker' : 'defender';
-    const num = 1;
+    const num = pid[1] as playerNum;
 
     return { team: pid[0], teamlong: _team, num };
   };
@@ -383,9 +416,9 @@ export default function binaryMatrixAPI(context: Context, args: any) {
   ): HandCard | undefined => {
     // romves specified card from players hand and returns it
     // return undefined if card is not present
-    const p = getPlayerPathByPid(pid);
+    const p = splitPid(pid);
 
-    const hand = state.hands[p.teamlong][p.num];
+    const hand = state.hands[p.teamlong][hexToDec(p.num)];
     if (!Array.isArray(hand)) throw new Error('player hand was not an array');
 
     const fitsValue = hand.filter((el) => el.value === value);
@@ -436,8 +469,12 @@ export default function binaryMatrixAPI(context: Context, args: any) {
     return nextPowerOfTwo;
   };
 
+  const toBrainState = (pid: pid, state: State): brainArgs => {
+    throw new Error('not implemented.');
+  };
+
   //#endregion helper functions
-  //#region binmat functions
+  //#region binmat game-functions
 
   const drawCard = (
     pid: pid,
@@ -445,14 +482,14 @@ export default function binaryMatrixAPI(context: Context, args: any) {
     game: Game
   ): boolean => {
     // get player drawing
-    const p = getPlayerPathByPid(pid);
+    const p = splitPid(pid);
 
     const r = sfc32(game.seed);
     const state = game.state;
 
     // get relevant stacks
     const { deck, discard } = getLane(lane, state);
-    const hand = state.hands[p.teamlong][p.num];
+    const hand = state.hands[p.teamlong][hexToDec(p.num)];
     if (!Array.isArray(hand)) throw new Error('player hand was not an array');
 
     // defender can't draw from attcker deck
@@ -468,7 +505,7 @@ export default function binaryMatrixAPI(context: Context, args: any) {
       deck.push(...shuffleArray(discard, r));
       discard.splice(0, discard.length);
       // if is visible lane, make top card visible
-      if (lane < 6 && lane > 2) deck[deck.length - 1].visibility = 'e';
+      if (lane < 6 && lane > 2) deck[deck.length - 1].up = true;
     }
 
     if (deck.length === 0) throw new Error('shuffling into deck did not work');
@@ -477,11 +514,11 @@ export default function binaryMatrixAPI(context: Context, args: any) {
     const card = deck.pop() as Card;
     if (lane < 6 && lane > 2) {
       // if one of the open decks, make next card visible
-      deck[deck.length - 1].visibility = 'e';
+      deck[deck.length - 1].up = true;
     }
 
     // set card visibility to team
-    card.visibility = p.team;
+    card.up = false;
     hand.push(card as HandCard);
 
     return true;
@@ -494,7 +531,7 @@ export default function binaryMatrixAPI(context: Context, args: any) {
     game: Game
   ): boolean => {
     // get player discarding
-    const p = getPlayerPathByPid(pid);
+    const p = splitPid(pid);
 
     // defender cannot discard to attcker discard
     if (p.team === 'd' && lane === 6) return false;
@@ -502,7 +539,7 @@ export default function binaryMatrixAPI(context: Context, args: any) {
     const state = game.state;
     // get relevant stacks
     const { deck, discard } = getLane(lane, state);
-    const hand = state.hands[p.teamlong][p.num];
+    const hand = state.hands[p.teamlong][hexToDec(p.num)];
     if (!Array.isArray(hand)) throw new Error('player hand was not an array');
 
     // remove from hand
@@ -513,7 +550,7 @@ export default function binaryMatrixAPI(context: Context, args: any) {
     if (discardCard === undefined) return false;
 
     // make visible and add to discard
-    discardCard.visibility = 'e';
+    discardCard.up = true;
     discard.push(discardCard as DiscardedCard);
 
     // if attacker discards to attacker discard, they draw two cards from attacker deck
@@ -533,7 +570,7 @@ export default function binaryMatrixAPI(context: Context, args: any) {
     up: boolean = false
   ): boolean => {
     // get player playing card
-    const p = getPlayerPathByPid(pid);
+    const p = splitPid(pid);
 
     const state = game.state;
 
@@ -545,7 +582,7 @@ export default function binaryMatrixAPI(context: Context, args: any) {
     const stacks = { attacker, defender };
     const stack = stacks[p.teamlong];
 
-    const hand = state.hands[p.teamlong][p.num];
+    const hand = state.hands[p.teamlong][hexToDec(p.num)];
     if (!Array.isArray(hand)) throw new Error('player hand was not an array');
 
     // > cannot be played on emtpy stacks
@@ -561,7 +598,7 @@ export default function binaryMatrixAPI(context: Context, args: any) {
     if (_card === undefined) return false;
 
     // play to deck
-    _card.visibility = up ? 'e' : p.team;
+    _card.up = up;
     stack.cards.push(_card as PlayedCard);
 
     // if face-up ? or > initiate combat
@@ -577,17 +614,17 @@ export default function binaryMatrixAPI(context: Context, args: any) {
     ax: Stack<DiscardedCard>
   ): boolean => {
     const asCards = as.cards.splice(0, as.cards.length);
-    asCards.forEach((el) => (el.visibility = 'e'));
+    asCards.forEach((el) => (el.up = true));
     ax.push(...(asCards as DiscardedCard[]));
 
-    ds.cards.forEach((el) => (el.visibility = 'e'));
+    ds.cards.forEach((el) => (el.up = true));
 
     return true;
   };
 
   const combat = (pid: pid, lane: laneNum, game: Game): boolean => {
     // get teams
-    const p = getPlayerPathByPid(pid);
+    const p = splitPid(pid);
     const o: { team: 'a' | 'd'; teamlong: 'attacker' | 'defender' } =
       p.team === 'a'
         ? { team: 'd', teamlong: 'defender' }
@@ -610,7 +647,7 @@ export default function binaryMatrixAPI(context: Context, args: any) {
     for (let i = 0; i < attackingTraps.length; i++) {
       let c = stacks[o.teamlong].cards.pop() as Card | undefined;
       if (c === undefined) break;
-      c.visibility = 'e';
+      c.up = true;
       discards[p.teamlong].push(c as DiscardedCard);
     }
 
@@ -620,7 +657,7 @@ export default function binaryMatrixAPI(context: Context, args: any) {
     for (let i = 0; i < defendingTraps.length; i++) {
       let c = stacks[p.teamlong].cards.pop() as Card | undefined;
       if (c === undefined) break;
-      c.visibility = 'e';
+      c.up = true;
       discards[o.teamlong].push(c as DiscardedCard);
     }
 
@@ -640,13 +677,13 @@ export default function binaryMatrixAPI(context: Context, args: any) {
       for (let bounce of bounces.attacker) {
         let ix = stacks.attacker.cards.indexOf(bounce);
         let c = stacks.attacker.cards.splice(ix, 1)[0];
-        c.visibility = 'e';
+        c.up = true;
         discards.defender.push(c as DiscardedCard);
       }
       for (let bounce of bounces.defender) {
         let ix = stacks.defender.cards.indexOf(bounce);
         let c = stacks.defender.cards.splice(ix, 1)[0];
-        c.visibility = 'e';
+        c.up = true;
         discards.attacker.push(c as DiscardedCard);
       }
       // bounce combat
@@ -665,11 +702,11 @@ export default function binaryMatrixAPI(context: Context, args: any) {
     if (winner === 'defender') {
       // discard as to xd
       let cards = stacks.attacker.cards.splice(0, stacks.attacker.cards.length);
-      cards.forEach((el) => (el.visibility = 'e'));
+      cards.forEach((el) => (el.up = true));
       discards.defender.push(...(cards as DiscardedCard[]));
 
       // turn ds up
-      stacks.defender.cards.forEach((el) => (el.visibility = 'e'));
+      stacks.defender.cards.forEach((el) => (el.up = true));
 
       return true;
     }
@@ -703,7 +740,7 @@ export default function binaryMatrixAPI(context: Context, args: any) {
           throw new Error(
             "ts wants this but I already check for the condition so if this error shows up the array had no items despite it's length being > 0"
           );
-        c.visibility = 'e';
+        c.up = true;
         ax.push(c as DiscardedCard);
       } else {
         // else draw card
@@ -713,7 +750,7 @@ export default function binaryMatrixAPI(context: Context, args: any) {
 
     // discard as
     let cards = stacks.attacker.cards.splice(0, stacks.attacker.cards.length);
-    cards.forEach((el) => (el.visibility = 'e'));
+    cards.forEach((el) => (el.up = true));
     discards.attacker.push(...(cards as DiscardedCard[]));
 
     return true;
