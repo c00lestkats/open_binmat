@@ -302,7 +302,7 @@ export default function binaryMatrixAPI(context: Context, args: any) {
     }
     // turn top card in lanes 3-5 up
     for (let i = 3; i < 6; i++) {
-      lanes[i].laneDeck[0].up = true;
+      lanes[i].laneDeck[12].up = true;
     }
 
     // put together state
@@ -618,6 +618,7 @@ export default function binaryMatrixAPI(context: Context, args: any) {
     ax.push(...(asCards as DiscardedCard[]));
 
     ds.cards.forEach((el) => (el.up = true));
+    ds.force_visible = true;
 
     return true;
   };
@@ -707,6 +708,7 @@ export default function binaryMatrixAPI(context: Context, args: any) {
 
       // turn ds up
       stacks.defender.cards.forEach((el) => (el.up = true));
+      stacks.defender.force_visible = true;
 
       return true;
     }
