@@ -98,9 +98,13 @@ export default function binaryMatrixAPI(context: Context, args: any) {
     laneDeck: Stack<DeckCard>;
     laneDiscard: Stack<DiscardedCard>;
   }
-  interface Player {
+  interface User {
     username: string;
     team: 'a' | 'd' | 's' | 't';
+  }
+  interface Player extends User {
+    username: string;
+    team: 'a' | 'd';
     id: pid; // a0, a1, d0 etc
     consecutiveNoOps: number;
   }
@@ -108,15 +112,21 @@ export default function binaryMatrixAPI(context: Context, args: any) {
     _id: any;
     type: 'binmat-game';
     state: State;
-    players: Player[];
+    players: User[];
     binlog: string[];
     turn: number;
     seed: [number, number, number, number];
-    queuedOps: any;
+    queuedOps: { [Key in Player['id']]?: operation | null };
     lastTurn: number; // unix timestamp of last turns execution
     status: 'lobby' | 'ongoing' | 'completed';
     settings: Settings;
+    nextOrd: pid[];
   }
+  type _drawop = `d${laneNum | 'a'}`;
+  type _discardop = `x${CardValues | cid}${laneNum | 'a'}`;
+  type _combatop = `c${laneNum}`;
+  type _playop = `${'p' | 'u'}${CardValues | cid}${laneNum}`;
+  type operation = _drawop | _discardop | _combatop | _playop;
   interface Settings {
     timeMode: 'async' | 'timed';
     turnTime: null | number;
@@ -487,14 +497,18 @@ export default function binaryMatrixAPI(context: Context, args: any) {
     return r;
   };
 
-  const toBrainState = (pid: pid, game: Game): brainArgs => {
+  const toBrainState = (pid: pid | 's' | 't', game: Game): brainArgs => {
     const result: Partial<brainArgs> = {};
     result.plr = pid;
 
     let prevTurn = `${game.turn - 2} ---`;
     result.ops = game.binlog.slice(game.binlog.indexOf(prevTurn));
 
-    result.plrs = game.players.map((el) => [el.id, el.username]);
+    result.plrs = game.players
+      .filter((el) => el.id !== undefined) // don't include spectators
+      .map((el) => [el.id, el.username]);
+
+    result.ord = game.nextOrd; // TODO idk if this is only players team order, it probably is so should filter
 
     result.s = {};
     result.s.turns = game.turn - 1;
@@ -559,9 +573,8 @@ export default function binaryMatrixAPI(context: Context, args: any) {
 
       result.s[`x${i}`] = displayCards(lane.laneDiscard);
     }
-    
 
-    return result as brainArgs
+    return result as brainArgs;
   };
 
   //#endregion helper functions
@@ -851,4 +864,66 @@ export default function binaryMatrixAPI(context: Context, args: any) {
 
   //#endregion binmat functions
   //#region script logic
+
+  const setNextOrd = (game: Game) => {
+    const pids = game.players
+      .map((el) => el.id)
+      .filter((el) => el[0] === 'a' || el[0] === 'd');
+    switch (game.settings.ord) {
+      case 'playerIndex':
+        return pids
+          .sort((a, b) => (a[1] > b[1] ? 1 : -1))
+          .sort((a, b) => (a[0] > b[0] ? -1 : 1));
+      case 'ramdom':
+        const r = sfc32(game.seed);
+        return shuffleArray(pids, r).sort((a, b) => (a[0] > b[0] ? -1 : 1));
+    }
+  };
+
+  const runOp = (as: pid, op: operation, game: Game) => {};
+
+  const isValidOp = (as: pid, op: operation, game: Game) => {};
+
+  const kickPlayer = (pid: pid, game: Game) => {};
+
+  const runTurn = (game: Game) => {
+    const players = game.players;
+
+    const ord = {
+      d: game.nextOrd.filter((el) => el[0] === 'd'),
+      a: game.nextOrd.filter((el) => el[0] === 'a'),
+    };
+    const team = game.turn % 2 === 0 ? 'd' : 'a';
+
+    game.binlog.push(`${game.turn} ---`);
+
+    for (let playerId of ord[team]) {
+      const op = game.queuedOps[playerId];
+
+      if (!isValidOp(playerId, op, game)) {
+        const player = players.find((el) => el.id === playerId);
+        player.consecutiveNoOps++;
+
+        if (
+          player.id !== 'a0' &&
+          player.id !== 'd0' &&
+          game.settings.kickOnInactive &&
+          player.consecutiveNoOps > game.settings.markInactiveTurns
+        )
+          kickPlayer(playerId, game);
+      } else {
+        player.consecutiveNoOps = 0;
+
+        runOp(playerId, game.queuedOps[playerId], game);
+      }
+    }
+
+    game.turn++;
+
+    if (team === 'a') setNextOrd(game);
+
+    game.lastTurn = Date.now();
+  };
+
+  const queueOp = (op: operation, game: Game) => {};
 }
