@@ -1,3 +1,5 @@
+import { defense } from '../../lib/skyscraper';
+
 export default function binaryMatrixAPI(context: Context, args: any) {
   //#region type definitions
   interface State {
@@ -45,7 +47,7 @@ export default function binaryMatrixAPI(context: Context, args: any) {
   }
   interface brainArgs {
     plr: // pid of current player,
-    pid;
+    pid | 's' | 't';
     s: //modified state, too lazy to ts define it since its rather complicated
     /**
      * {
@@ -63,6 +65,7 @@ export default function binaryMatrixAPI(context: Context, args: any) {
     any;
     plrs: // array of players in the format [pid, username]
     [pid, string][];
+    ord: any[];
     ops: // binlog since last turn (of this player, so 2 turns)
     string[];
   }
@@ -78,7 +81,11 @@ export default function binaryMatrixAPI(context: Context, args: any) {
   ];
   type CardValues = 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 'a' | '?' | '>' | '*' | '@';
   type CardSigns = '^' | '+' | '%' | '&' | '!' | '#';
-  interface Card {
+  interface SpecifiedCard {
+    value: CardValues;
+    sign?: CardSigns;
+  }
+  interface Card extends SpecifiedCard {
     value: CardValues;
     sign: CardSigns;
     up: boolean;
@@ -98,7 +105,7 @@ export default function binaryMatrixAPI(context: Context, args: any) {
     laneDeck: Stack<DeckCard>;
     laneDiscard: Stack<DiscardedCard>;
   }
-  interface User {
+  interface Userbase {
     username: string;
     team: 'a' | 'd' | 's' | 't';
   }
@@ -108,6 +115,10 @@ export default function binaryMatrixAPI(context: Context, args: any) {
     id: pid; // a0, a1, d0 etc
     consecutiveNoOps: number;
   }
+  interface Spectator extends User {
+    team: 's' | 't';
+  }
+  type User = Player | Spectator;
   interface Game {
     _id: any;
     type: 'binmat-game';
@@ -504,8 +515,11 @@ export default function binaryMatrixAPI(context: Context, args: any) {
     let prevTurn = `${game.turn - 2} ---`;
     result.ops = game.binlog.slice(game.binlog.indexOf(prevTurn));
 
-    result.plrs = game.players
-      .filter((el) => el.id !== undefined) // don't include spectators
+    result.plrs = (
+      game.players.filter(
+        (el) => el.team === 'a' || el.team === 'd'
+      ) as Player[]
+    ) // don't include spectators
       .map((el) => [el.id, el.username]);
 
     result.ord = game.nextOrd; // TODO idk if this is only players team order, it probably is so should filter
@@ -631,7 +645,7 @@ export default function binaryMatrixAPI(context: Context, args: any) {
   const discardCard = (
     pid: pid,
     lane: laneNum | attackerDeckLane,
-    card: Card,
+    card: SpecifiedCard,
     game: Game
   ): boolean => {
     // get player discarding
@@ -669,7 +683,7 @@ export default function binaryMatrixAPI(context: Context, args: any) {
   const playCard = (
     pid: pid,
     lane: laneNum,
-    card: Card,
+    card: SpecifiedCard,
     game: Game,
     up: boolean = false
   ): boolean => {
@@ -707,7 +721,7 @@ export default function binaryMatrixAPI(context: Context, args: any) {
 
     // if face-up ? or > initiate combat
     if (up && (_card.value === '>' || _card.value === '?'))
-      combat(pid, lane, game);
+      combat(pid, lane, game, true);
 
     return true;
   };
@@ -727,7 +741,12 @@ export default function binaryMatrixAPI(context: Context, args: any) {
     return true;
   };
 
-  const combat = (pid: pid, lane: laneNum, game: Game): boolean => {
+  const combat = (
+    pid: pid,
+    lane: laneNum,
+    game: Game,
+    fromBreak: boolean = false
+  ): boolean => {
     // get teams
     const p = splitPid(pid);
     const o: { team: 'a' | 'd'; teamlong: 'attacker' | 'defender' } =
@@ -744,6 +763,8 @@ export default function binaryMatrixAPI(context: Context, args: any) {
     );
     const stacks = { attacker: attackerStack, defender: defenderStack };
     const discards = { attacker: _attackerDiscard, defender: discard };
+
+    if (p.teamlong == 'defender' && !fromBreak) return false;
 
     // resolve traps
     const attackingTraps = stacks[o.teamlong].cards.filter(
@@ -880,14 +901,97 @@ export default function binaryMatrixAPI(context: Context, args: any) {
     }
   };
 
-  const runOp = (as: pid, op: operation, game: Game) => {};
+  const getCardAndLaneFromOp = (
+    op: _discardop | _playop,
+    allowAttackerLane: boolean = true
+  ):
+    | {
+        lane: laneNum | attackerDeckLane;
+        cardVal: CardValues;
+        cardSign?: CardSigns;
+      }
+    | false => {
+    // second char has to be a cardValue
+    if (!cardValues.map((el) => String(el)).includes(op[1])) return false;
+    let cardVal = op[1] as CardValues;
+    let cardSign;
+    // thir char can be a cardSign | laneNum | attackerLaneNum
+    let l = op[2];
+    if (cardSigns.includes(l)) {
+      l = op[3];
+      cardSign = op[2] as CardSigns;
+    }
+    // laneNum has to always be specified
+    if (l === 'a' && !allowAttackerLane) return false;
+    const _lane = l === 'a' ? 6 : Number(l);
+    // validate correct lane
+    if (Number.isNaN(_lane)) return false;
+    if (_lane > 6 || _lane < 0) return false;
+    return { lane: _lane as laneNum | 6, cardVal, cardSign };
+  };
 
-  const isValidOp = (as: pid, op: operation, game: Game) => {};
+  const runOp = (as: pid, op: operation, game: Game): boolean => {
+    if (!checkOpSyntax(op)) return false;
+
+    return false;
+  };
+
+  /**
+   * method to check syntactic correctness of operation
+   * @param as playerId
+   * @param op op they submitted
+   * @param game game state
+   * @returns boolean, true if syntactially valid operation
+   */
+  const checkOpSyntax = (op: operation): boolean => {
+    switch (op[0]) {
+      // first char needs to be "d" | "x" | "p" | "u" | "c"
+      case 'd':
+        // dL where L is laneNum | "a"
+        if (op.length < 2 || op.length > 2) return false;
+        const l = op[1];
+        if (l === 'a') {
+          return true;
+        }
+        const _lane = Number(l);
+        // validate correct lane
+        if (Number.isNaN(_lane)) return false;
+        if (_lane < 0 || _lane > 5) return false;
+        // has to already be an integer, it'so only 1 char so no need to check for that
+        return true;
+      case 'x':
+      case 'p':
+      case 'u':
+        // (x|p|u)CL where C is cardValue | cid and L is laneNum (or, only for x, "a")
+        if (op.length < 2 || op.length > 4) return false;
+        // second char has to be a cardValue
+        if (!cardValues.map((el) => String(el)).includes(op[1])) return false;
+        // third char can be a cardSign or a laneNum, if it is a CardSign, go to next char to look for laneNum
+        const parse = getCardAndLaneFromOp(
+          op as _discardop | _playop,
+          op[0] === 'x'
+        );
+        if (parse === false) return false;
+        return true;
+      case 'c':
+        // cL where L is LaneNum
+        if (op.length < 2 || op.length > 2) return false;
+        const _lane = Number(op[1]);
+        // validate correct lane
+        if (Number.isNaN(_lane)) return false;
+        if (_lane < 0 || _lane > 5) return false;
+        return true;
+      default:
+        return false;
+    }
+  };
 
   const kickPlayer = (pid: pid, game: Game) => {};
 
   const runTurn = (game: Game) => {
-    const players = game.players;
+    const players: Player[] = game.players.filter(
+      (el) => el.team === 'a' || el.team === 'd'
+    ) as Player[];
 
     const ord = {
       d: game.nextOrd.filter((el) => el[0] === 'd'),
@@ -899,9 +1003,16 @@ export default function binaryMatrixAPI(context: Context, args: any) {
 
     for (let playerId of ord[team]) {
       const op = game.queuedOps[playerId];
+      const player = players.find((el) => el.id === playerId);
+      if (!player)
+        throw new Error(
+          `Could not find player with pid ${playerId}, who was specified in ord`
+        );
 
-      if (!isValidOp(playerId, op, game)) {
-        const player = players.find((el) => el.id === playerId);
+      let validop =
+        op !== undefined && op !== null && runOp(playerId, op, game);
+
+      if (!validop) {
         player.consecutiveNoOps++;
 
         if (
@@ -911,11 +1022,7 @@ export default function binaryMatrixAPI(context: Context, args: any) {
           player.consecutiveNoOps > game.settings.markInactiveTurns
         )
           kickPlayer(playerId, game);
-      } else {
-        player.consecutiveNoOps = 0;
-
-        runOp(playerId, game.queuedOps[playerId], game);
-      }
+      } else player.consecutiveNoOps = 0;
     }
 
     game.turn++;
