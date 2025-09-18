@@ -1,5 +1,3 @@
-import { defense } from '../../lib/skyscraper';
-
 export default function binaryMatrixAPI(context: Context, args: any) {
   //#region type definitions
   interface State {
@@ -900,8 +898,27 @@ export default function binaryMatrixAPI(context: Context, args: any) {
         return shuffleArray(pids, r).sort((a, b) => (a[0] > b[0] ? -1 : 1));
     }
   };
-
-  const getCardAndLaneFromOp = (
+  function getCardAndLaneFromOp(
+    op: _discardop | _playop,
+    allowAttackerLane: false
+  ):
+    | {
+        lane: laneNum;
+        cardVal: CardValues;
+        cardSign?: CardSigns;
+      }
+    | false;
+    function getCardAndLaneFromOp(
+    op: _discardop | _playop,
+    allowAttackerLane?: boolean
+  ):
+    | {
+        lane: laneNum  | attackerDeckLane;
+        cardVal: CardValues;
+        cardSign?: CardSigns;
+      }
+    | false;
+  function getCardAndLaneFromOp(
     op: _discardop | _playop,
     allowAttackerLane: boolean = true
   ):
@@ -910,7 +927,7 @@ export default function binaryMatrixAPI(context: Context, args: any) {
         cardVal: CardValues;
         cardSign?: CardSigns;
       }
-    | false => {
+    | false {
     // second char has to be a cardValue
     if (!cardValues.map((el) => String(el)).includes(op[1])) return false;
     let cardVal = op[1] as CardValues;
@@ -928,12 +945,59 @@ export default function binaryMatrixAPI(context: Context, args: any) {
     if (Number.isNaN(_lane)) return false;
     if (_lane > 6 || _lane < 0) return false;
     return { lane: _lane as laneNum | 6, cardVal, cardSign };
-  };
+  }
 
   const runOp = (as: pid, op: operation, game: Game): boolean => {
+    // by running a general validation we don't need to verify correct syntax anymore 
+    // and can expect only operations that are parse-able
     if (!checkOpSyntax(op)) return false;
 
-    return false;
+    switch (op[0]) {
+      case 'd':
+        // draw op
+        const lane = op.charAt(1);
+
+        let num: laneNum | attackerDeckLane = Number(lane) as laneNum;
+        if (lane === 'a') num = 6;
+
+        return drawCard(as, num, game);
+      case 'x':
+        // discard op
+        const parse = getCardAndLaneFromOp(op as _discardop);
+        if (parse === false)
+          throw new Error(
+            `could not get details from operation ${op}, this is likely a validation error`
+          );
+        return discardCard(
+          as,
+          parse.lane,
+          { sign: parse.cardSign, value: parse.cardVal },
+          game
+        );
+      case 'c':
+        // combat op
+         const lane = op.charAt(1);
+
+         if (lane === 'a') return false;
+        let num: laneNum = Number(lane) as laneNum;
+
+        return combat(as, num, game);
+      case "u":
+      case "p":
+      // play op
+      const up = op[0] === "u";
+
+        const parse =  const parse = getCardAndLaneFromOp(op as _playop, false);
+        if (parse === false)
+          throw new Error(
+            `could not get details from operation ${op}, this is likely a validation error`
+          );
+
+        return playCard(as,parse.lane,{value:parse.cardVal, sign:parse.cardSign},game,up)
+      
+      default:
+        return false;
+    }
   };
 
   /**
