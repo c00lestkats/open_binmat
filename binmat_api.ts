@@ -107,13 +107,13 @@ export default function binaryMatrixAPI(context: Context, args: any) {
     username: string;
     team: 'a' | 'd' | 's' | 't';
   }
-  interface Player extends User {
+  interface Player extends Userbase {
     username: string;
     team: 'a' | 'd';
     id: pid; // a0, a1, d0 etc
     consecutiveNoOps: number;
   }
-  interface Spectator extends User {
+  interface Spectator extends Userbase {
     team: 's' | 't';
   }
   type User = Player | Spectator;
@@ -885,7 +885,11 @@ export default function binaryMatrixAPI(context: Context, args: any) {
   //#region script logic
 
   const setNextOrd = (game: Game) => {
-    const pids = game.players
+    const pids = (
+      game.players.filter(
+        (el) => el.team === 'a' || el.team === 'd'
+      ) as Player[]
+    )
       .map((el) => el.id)
       .filter((el) => el[0] === 'a' || el[0] === 'd');
     switch (game.settings.ord) {
@@ -908,12 +912,12 @@ export default function binaryMatrixAPI(context: Context, args: any) {
         cardSign?: CardSigns;
       }
     | false;
-    function getCardAndLaneFromOp(
+  function getCardAndLaneFromOp(
     op: _discardop | _playop,
     allowAttackerLane?: boolean
   ):
     | {
-        lane: laneNum  | attackerDeckLane;
+        lane: laneNum | attackerDeckLane;
         cardVal: CardValues;
         cardSign?: CardSigns;
       }
@@ -934,7 +938,7 @@ export default function binaryMatrixAPI(context: Context, args: any) {
     let cardSign;
     // thir char can be a cardSign | laneNum | attackerLaneNum
     let l = op[2];
-    if (cardSigns.includes(l)) {
+    if (cardSigns.includes(l as any)) {
       l = op[3];
       cardSign = op[2] as CardSigns;
     }
@@ -948,53 +952,59 @@ export default function binaryMatrixAPI(context: Context, args: any) {
   }
 
   const runOp = (as: pid, op: operation, game: Game): boolean => {
-    // by running a general validation we don't need to verify correct syntax anymore 
+    // by running a general validation we don't need to verify correct syntax anymore
     // and can expect only operations that are parse-able
     if (!checkOpSyntax(op)) return false;
 
     switch (op[0]) {
       case 'd':
         // draw op
-        const lane = op.charAt(1);
+        const drawlane = op.charAt(1);
 
-        let num: laneNum | attackerDeckLane = Number(lane) as laneNum;
-        if (lane === 'a') num = 6;
+        let num: laneNum | attackerDeckLane = Number(drawlane) as laneNum;
+        if (drawlane === 'a') num = 6;
 
         return drawCard(as, num, game);
       case 'x':
         // discard op
-        const parse = getCardAndLaneFromOp(op as _discardop);
-        if (parse === false)
+        const drawparse = getCardAndLaneFromOp(op as _discardop);
+        if (drawparse === false)
           throw new Error(
             `could not get details from operation ${op}, this is likely a validation error`
           );
         return discardCard(
           as,
-          parse.lane,
-          { sign: parse.cardSign, value: parse.cardVal },
+          drawparse.lane,
+          { sign: drawparse.cardSign, value: drawparse.cardVal },
           game
         );
       case 'c':
         // combat op
-         const lane = op.charAt(1);
+        const lane = op.charAt(1);
 
-         if (lane === 'a') return false;
-        let num: laneNum = Number(lane) as laneNum;
+        if (lane === 'a') return false;
+        let combatLaneNum: laneNum = Number(lane) as laneNum;
 
-        return combat(as, num, game);
-      case "u":
-      case "p":
-      // play op
-      const up = op[0] === "u";
+        return combat(as, combatLaneNum, game);
+      case 'u':
+      case 'p':
+        // play op
+        const up = op[0] === 'u';
 
-        const parse =  const parse = getCardAndLaneFromOp(op as _playop, false);
+        const parse = getCardAndLaneFromOp(op as _playop, false);
         if (parse === false)
           throw new Error(
             `could not get details from operation ${op}, this is likely a validation error`
           );
 
-        return playCard(as,parse.lane,{value:parse.cardVal, sign:parse.cardSign},game,up)
-      
+        return playCard(
+          as,
+          parse.lane,
+          { value: parse.cardVal, sign: parse.cardSign },
+          game,
+          up
+        );
+
       default:
         return false;
     }
@@ -1040,10 +1050,10 @@ export default function binaryMatrixAPI(context: Context, args: any) {
       case 'c':
         // cL where L is LaneNum
         if (op.length < 2 || op.length > 2) return false;
-        const _lane = Number(op[1]);
+        const _clane = Number(op[1]);
         // validate correct lane
-        if (Number.isNaN(_lane)) return false;
-        if (_lane < 0 || _lane > 5) return false;
+        if (Number.isNaN(_clane)) return false;
+        if (_clane < 0 || _clane > 5) return false;
         return true;
       default:
         return false;
