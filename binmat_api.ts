@@ -67,16 +67,22 @@ export default function binaryMatrixAPI(context: Context, args: any) {
     ops: // binlog since last turn (of this player, so 2 turns)
     string[];
   }
-  const cardValues: readonly [2, 3, 4, 5, 6, 7, 8, 9, 'a', '?', '>', '@', '*'] =
-    [2, 3, 4, 5, 6, 7, 8, 9, 'a', '?', '>', '@', '*'];
-  const cardSigns: readonly ['^', '+', '%', '&', '!', '#'] = [
-    '^',
-    '+',
-    '%',
-    '&',
-    '!',
-    '#',
+  const cardValues: readonly [2, 3, 4, 5, 6, 7, 8, 9, 'a', '?', '>', '@', '*'] = [
+    2,
+    3,
+    4,
+    5,
+    6,
+    7,
+    8,
+    9,
+    'a',
+    '?',
+    '>',
+    '@',
+    '*',
   ];
+  const cardSigns: readonly ['^', '+', '%', '&', '!', '#'] = ['^', '+', '%', '&', '!', '#'];
   type CardValues = 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 'a' | '?' | '>' | '*' | '@';
   type CardSigns = '^' | '+' | '%' | '&' | '!' | '#';
   interface SpecifiedCard {
@@ -261,8 +267,7 @@ export default function binaryMatrixAPI(context: Context, args: any) {
       let k = Object.keys(settings);
       let a = Object.keys(defaultSettings);
       let f = k.filter((el) => !a.includes(el));
-      if (f.length !== 0)
-        return { ok: false, msg: 'unkown settings detected: ' + f.join(', ') };
+      if (f.length !== 0) return { ok: false, msg: 'unkown settings detected: ' + f.join(', ') };
     }
 
     const _settings: Settings = { ...defaultSettings, ...settings };
@@ -275,18 +280,12 @@ export default function binaryMatrixAPI(context: Context, args: any) {
     };
 
     let r = $db.i(game as unknown as any)[0];
-    if (r.n !== 1)
-      return { ok: false, msg: 'db insert failed, please try again' };
+    if (r.n !== 1) return { ok: false, msg: 'db insert failed, please try again' };
 
     return { ok: true, msg: game._id };
   }
 
-  function createGame(
-    gameId: string,
-    _seed: string,
-    a0: string,
-    d0: string
-  ): boolean {
+  function createGame(gameId: string, _seed: string, a0: string, d0: string): boolean {
     const seed = cyrb128(_seed);
     const r = sfc32(seed);
     const rInt = (max: number): number => Math.floor(r() * max) + 1;
@@ -314,9 +313,7 @@ export default function binaryMatrixAPI(context: Context, args: any) {
     // fill cards into lanes, randomly based on seed
     while (availibleCards.length > 0) {
       let card: DeckCard = availibleCards[rInt(availibleCards.length - 1)];
-      let availibleLanes: Lane[] = lanes.filter(
-        (el: Lane) => el.laneDeck.length < 13
-      );
+      let availibleLanes: Lane[] = lanes.filter((el: Lane) => el.laneDeck.length < 13);
 
       availibleLanes[rInt(availibleLanes.length - 1)].laneDeck.push(card);
     }
@@ -371,8 +368,7 @@ export default function binaryMatrixAPI(context: Context, args: any) {
   const splitPid = (
     pid: pid
   ): { team: 'a' | 'd'; teamlong: 'attacker' | 'defender'; num: playerNum } => {
-    if (!(pid[0] === 'a' || pid[0] === 'd'))
-      throw new Error('illegal player id');
+    if (!(pid[0] === 'a' || pid[0] === 'd')) throw new Error('illegal player id');
 
     const _team = pid[0] === 'a' ? 'attacker' : 'defender';
     const num = pid[1] as playerNum;
@@ -457,9 +453,7 @@ export default function binaryMatrixAPI(context: Context, args: any) {
     return;
   };
 
-  const powersOfTwo = [
-    2, 4, 8, 16, 32, 64, 128, 256, 512, 1024, 2048, 4096, 8192, 16384,
-  ];
+  const powersOfTwo = [2, 4, 8, 16, 32, 64, 128, 256, 512, 1024, 2048, 4096, 8192, 16384];
 
   const calcStackPow = (stack: Stack<Card>): number => {
     // calculate number sum
@@ -483,9 +477,7 @@ export default function binaryMatrixAPI(context: Context, args: any) {
   const applyWild = (num: number): number => {
     const nextPowerOfTwo = powersOfTwo.find((el) => el > num);
     if (!nextPowerOfTwo)
-      throw new Error(
-        'Could not apply wild, number was higher than 16384 (2 ** 14)'
-      );
+      throw new Error('Could not apply wild, number was higher than 16384 (2 ** 14)');
     return nextPowerOfTwo;
   };
 
@@ -513,11 +505,7 @@ export default function binaryMatrixAPI(context: Context, args: any) {
     let prevTurn = `${game.turn - 2} ---`;
     result.ops = game.binlog.slice(game.binlog.indexOf(prevTurn));
 
-    result.plrs = (
-      game.players.filter(
-        (el) => el.team === 'a' || el.team === 'd'
-      ) as Player[]
-    ) // don't include spectators
+    result.plrs = (game.players.filter((el) => el.team === 'a' || el.team === 'd') as Player[]) // don't include spectators
       .map((el) => [el.id, el.username]);
 
     result.ord = game.nextOrd; // TODO idk if this is only players team order, it probably is so should filter
@@ -537,9 +525,7 @@ export default function binaryMatrixAPI(context: Context, args: any) {
         throw new Error(
           'typescript does not get thesse implied constraints, i < array.length means I _can_ index the array with i thanks'
         );
-      result.s[`ha${decToHex(i)}`] = isAttacker
-        ? displayCards(hand)
-        : hand.length;
+      result.s[`ha${decToHex(i)}`] = isAttacker ? displayCards(hand) : hand.length;
     }
 
     // defender-specific things
@@ -550,9 +536,7 @@ export default function binaryMatrixAPI(context: Context, args: any) {
         throw new Error(
           'typescript does not get thesse implied constraints, i < array.length means I _can_ index the array with i thanks'
         );
-      result.s[`da${decToHex(i)}`] = isDefender
-        ? displayCards(hand)
-        : hand.length;
+      result.s[`da${decToHex(i)}`] = isDefender ? displayCards(hand) : hand.length;
     }
 
     // general things
@@ -570,18 +554,8 @@ export default function binaryMatrixAPI(context: Context, args: any) {
 
       const as = lane.attackerStack;
       const ds = lane.defenderStack;
-      result.s[`a${i}`] = displayCards(
-        as.cards,
-        isAttacker,
-        true,
-        as.force_visible
-      );
-      result.s[`d${i}`] = displayCards(
-        ds.cards,
-        isDefender,
-        true,
-        ds.force_visible
-      );
+      result.s[`a${i}`] = displayCards(as.cards, isAttacker, true, as.force_visible);
+      result.s[`d${i}`] = displayCards(ds.cards, isDefender, true, ds.force_visible);
 
       result.s[`x${i}`] = displayCards(lane.laneDiscard);
     }
@@ -592,11 +566,7 @@ export default function binaryMatrixAPI(context: Context, args: any) {
   //#endregion helper functions
   //#region binmat game-functions
 
-  const drawCard = (
-    pid: pid,
-    lane: laneNum | attackerDeckLane,
-    game: Game
-  ): boolean => {
+  const drawCard = (pid: pid, lane: laneNum | attackerDeckLane, game: Game): boolean => {
     // get player drawing
     const p = splitPid(pid);
 
@@ -659,9 +629,7 @@ export default function binaryMatrixAPI(context: Context, args: any) {
     if (!Array.isArray(hand)) throw new Error('player hand was not an array');
 
     // remove from hand
-    let discardCard = spliceCardFromHand(pid, state, card.value, card.sign) as
-      | Card
-      | undefined;
+    let discardCard = spliceCardFromHand(pid, state, card.value, card.sign) as Card | undefined;
 
     if (discardCard === undefined) return false;
 
@@ -691,10 +659,7 @@ export default function binaryMatrixAPI(context: Context, args: any) {
     const state = game.state;
 
     // get relevant stacks
-    const { attackerStack: attacker, defenderStack: defender } = getLane(
-      lane,
-      state
-    );
+    const { attackerStack: attacker, defenderStack: defender } = getLane(lane, state);
     const stacks = { attacker, defender };
     const stack = stacks[p.teamlong];
 
@@ -704,13 +669,10 @@ export default function binaryMatrixAPI(context: Context, args: any) {
     // > cannot be played on emtpy stacks
     // ? cannot be played face-up on non-empty stacks by attackers
     if (card.value === '>' && stack.cards.length === 0) return false;
-    if (card.value === '?' && up && stack.cards.length === 0 && p.team === 'a')
-      return false;
+    if (card.value === '?' && up && stack.cards.length === 0 && p.team === 'a') return false;
 
     // remove from hand
-    const _card = spliceCardFromHand(pid, state, card.value, card.sign) as
-      | Card
-      | undefined;
+    const _card = spliceCardFromHand(pid, state, card.value, card.sign) as Card | undefined;
     if (_card === undefined) return false;
 
     // play to deck
@@ -718,17 +680,12 @@ export default function binaryMatrixAPI(context: Context, args: any) {
     stack.cards.push(_card as PlayedCard);
 
     // if face-up ? or > initiate combat
-    if (up && (_card.value === '>' || _card.value === '?'))
-      combat(pid, lane, game, true);
+    if (up && (_card.value === '>' || _card.value === '?')) combat(pid, lane, game, true);
 
     return true;
   };
 
-  const bounceCombat = (
-    as: CombatStack,
-    ds: CombatStack,
-    ax: Stack<DiscardedCard>
-  ): boolean => {
+  const bounceCombat = (as: CombatStack, ds: CombatStack, ax: Stack<DiscardedCard>): boolean => {
     const asCards = as.cards.splice(0, as.cards.length);
     asCards.forEach((el) => (el.up = true));
     ax.push(...(asCards as DiscardedCard[]));
@@ -739,35 +696,23 @@ export default function binaryMatrixAPI(context: Context, args: any) {
     return true;
   };
 
-  const combat = (
-    pid: pid,
-    lane: laneNum,
-    game: Game,
-    fromBreak: boolean = false
-  ): boolean => {
+  const combat = (pid: pid, lane: laneNum, game: Game, fromBreak: boolean = false): boolean => {
     // get teams
     const p = splitPid(pid);
     const o: { team: 'a' | 'd'; teamlong: 'attacker' | 'defender' } =
-      p.team === 'a'
-        ? { team: 'd', teamlong: 'defender' }
-        : { team: 'a', teamlong: 'attacker' };
+      p.team === 'a' ? { team: 'd', teamlong: 'defender' } : { team: 'a', teamlong: 'attacker' };
 
     // get relevant stacks
     const state = game.state;
     const _attackerDiscard = state.attackerDiscard;
-    const { discard, deck, attackerStack, defenderStack } = getLane(
-      lane,
-      state
-    );
+    const { discard, deck, attackerStack, defenderStack } = getLane(lane, state);
     const stacks = { attacker: attackerStack, defender: defenderStack };
     const discards = { attacker: _attackerDiscard, defender: discard };
 
     if (p.teamlong == 'defender' && !fromBreak) return false;
 
     // resolve traps
-    const attackingTraps = stacks[o.teamlong].cards.filter(
-      (el) => el.value === '@'
-    );
+    const attackingTraps = stacks[o.teamlong].cards.filter((el) => el.value === '@');
     for (let i = 0; i < attackingTraps.length; i++) {
       let c = stacks[o.teamlong].cards.pop() as Card | undefined;
       if (c === undefined) break;
@@ -775,9 +720,7 @@ export default function binaryMatrixAPI(context: Context, args: any) {
       discards[p.teamlong].push(c as DiscardedCard);
     }
 
-    const defendingTraps = stacks[p.teamlong].cards.filter(
-      (el) => el.value === '@'
-    );
+    const defendingTraps = stacks[p.teamlong].cards.filter((el) => el.value === '@');
     for (let i = 0; i < defendingTraps.length; i++) {
       let c = stacks[p.teamlong].cards.pop() as Card | undefined;
       if (c === undefined) break;
@@ -885,18 +828,12 @@ export default function binaryMatrixAPI(context: Context, args: any) {
   //#region script logic
 
   const setNextOrd = (game: Game) => {
-    const pids = (
-      game.players.filter(
-        (el) => el.team === 'a' || el.team === 'd'
-      ) as Player[]
-    )
+    const pids = (game.players.filter((el) => el.team === 'a' || el.team === 'd') as Player[])
       .map((el) => el.id)
       .filter((el) => el[0] === 'a' || el[0] === 'd');
     switch (game.settings.ord) {
       case 'playerIndex':
-        return pids
-          .sort((a, b) => (a[1] > b[1] ? 1 : -1))
-          .sort((a, b) => (a[0] > b[0] ? -1 : 1));
+        return pids.sort((a, b) => (a[1] > b[1] ? 1 : -1)).sort((a, b) => (a[0] > b[0] ? -1 : 1));
       case 'ramdom':
         const r = sfc32(game.seed);
         return shuffleArray(pids, r).sort((a, b) => (a[0] > b[0] ? -1 : 1));
@@ -936,10 +873,10 @@ export default function binaryMatrixAPI(context: Context, args: any) {
     if (!cardValues.map((el) => String(el)).includes(op[1])) return false;
     let cardVal = op[1] as CardValues;
     let cardSign;
-    // thir char can be a cardSign | laneNum | attackerLaneNum
-    let l = op[2];
-    if (cardSigns.includes(l as any)) {
-      l = op[3];
+    // third char can be a cardSign | laneNum | attackerLaneNum
+    let l = op[2] as CardSigns | `${laneNum}` | 'a';
+    if ((cardSigns as readonly string[]).includes(l)) {
+      l = op[3] as `${laneNum}` | 'a';
       cardSign = op[2] as CardSigns;
     }
     // laneNum has to always be specified
@@ -997,13 +934,7 @@ export default function binaryMatrixAPI(context: Context, args: any) {
             `could not get details from operation ${op}, this is likely a validation error`
           );
 
-        return playCard(
-          as,
-          parse.lane,
-          { value: parse.cardVal, sign: parse.cardSign },
-          game,
-          up
-        );
+        return playCard(as, parse.lane, { value: parse.cardVal, sign: parse.cardSign }, game, up);
 
       default:
         return false;
@@ -1041,10 +972,7 @@ export default function binaryMatrixAPI(context: Context, args: any) {
         // second char has to be a cardValue
         if (!cardValues.map((el) => String(el)).includes(op[1])) return false;
         // third char can be a cardSign or a laneNum, if it is a CardSign, go to next char to look for laneNum
-        const parse = getCardAndLaneFromOp(
-          op as _discardop | _playop,
-          op[0] === 'x'
-        );
+        const parse = getCardAndLaneFromOp(op as _discardop | _playop, op[0] === 'x');
         if (parse === false) return false;
         return true;
       case 'c':
@@ -1079,12 +1007,9 @@ export default function binaryMatrixAPI(context: Context, args: any) {
       const op = game.queuedOps[playerId];
       const player = players.find((el) => el.id === playerId);
       if (!player)
-        throw new Error(
-          `Could not find player with pid ${playerId}, who was specified in ord`
-        );
+        throw new Error(`Could not find player with pid ${playerId}, who was specified in ord`);
 
-      let validop =
-        op !== undefined && op !== null && runOp(playerId, op, game);
+      let validop = op !== undefined && op !== null && runOp(playerId, op, game);
 
       if (!validop) {
         player.consecutiveNoOps++;
