@@ -1,48 +1,17 @@
 export default function binaryMatrixAPI(context: Context, args: any) {
   //#region type definitions
-  interface State {
+    interface State {
     lanes: [Lane, Lane, Lane, Lane, Lane, Lane];
     attackerDiscard: Stack<DiscardedCard>;
     attackerDeck: Stack<DeckCard>;
     hands: {
-      attacker: [
-        Stack<HandCard>,
-        Stack<HandCard>?,
-        Stack<HandCard>?,
-        Stack<HandCard>?,
-        Stack<HandCard>?,
-        Stack<HandCard>?,
-        Stack<HandCard>?,
-        Stack<HandCard>?,
-        Stack<HandCard>?,
-        Stack<HandCard>?,
-        Stack<HandCard>?,
-        Stack<HandCard>?,
-        Stack<HandCard>?,
-        Stack<HandCard>?,
-        Stack<HandCard>?,
-        Stack<HandCard>?
-      ];
-      defender: [
-        Stack<HandCard>,
-        Stack<HandCard>?,
-        Stack<HandCard>?,
-        Stack<HandCard>?,
-        Stack<HandCard>?,
-        Stack<HandCard>?,
-        Stack<HandCard>?,
-        Stack<HandCard>?,
-        Stack<HandCard>?,
-        Stack<HandCard>?,
-        Stack<HandCard>?,
-        Stack<HandCard>?,
-        Stack<HandCard>?,
-        Stack<HandCard>?,
-        Stack<HandCard>?,
-        Stack<HandCard>?
-      ];
+      attacker: max16Array<Stack<HandCard>>;
+      defender: max16Array<Stack<HandCard>>;
     };
   }
+
+  type AllowedLength = 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12 | 13 | 14 | 15 | 16;
+  type max16Array<T> = Array<T> & { length: AllowedLength };
   interface brainArgs {
     plr: // pid of current player,
     pid | 's' | 't';
@@ -67,24 +36,10 @@ export default function binaryMatrixAPI(context: Context, args: any) {
     ops: // binlog since last turn (of this player, so 2 turns)
     string[];
   }
-  const cardValues: readonly [2, 3, 4, 5, 6, 7, 8, 9, 'a', '?', '>', '@', '*'] = [
-    2,
-    3,
-    4,
-    5,
-    6,
-    7,
-    8,
-    9,
-    'a',
-    '?',
-    '>',
-    '@',
-    '*',
-  ];
-  const cardSigns: readonly ['^', '+', '%', '&', '!', '#'] = ['^', '+', '%', '&', '!', '#'];
-  type CardValues = 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 'a' | '?' | '>' | '*' | '@';
-  type CardSigns = '^' | '+' | '%' | '&' | '!' | '#';
+  const cardValues = [2, 3, 4, 5, 6, 7, 8, 9, 'a', '?', '>', '@', '*'] as const;
+  const cardSigns = ['^', '+', '%', '&', '!', '#'] as const;
+  type CardValues = (typeof cardValues)[number];
+  type CardSigns = (typeof cardSigns)[number];
   interface SpecifiedCard {
     value: CardValues;
     sign?: CardSigns;
