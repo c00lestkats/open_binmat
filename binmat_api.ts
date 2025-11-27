@@ -1,6 +1,6 @@
 export default function binaryMatrixAPI(context: Context, args: any) {
   //#region type definitions
-    interface State {
+  interface State {
     lanes: [Lane, Lane, Lane, Lane, Lane, Lane];
     attackerDiscard: Stack<DiscardedCard>;
     attackerDeck: Stack<DeckCard>;
@@ -180,12 +180,12 @@ export default function binaryMatrixAPI(context: Context, args: any) {
   //#endregion randomness functions
   //#region lobby functions
   const colors = {
-    '^': 'I',
-    '+': 'C',
-    '%': 'N',
-    '&': 'l',
-    '!': 'D',
-    '#': 'F',
+    '^': 'I' as char,
+    '+': 'q' as char,
+    '%': 'N' as char,
+    '&': 'l' as char,
+    '!': 'D' as char,
+    '#': 'F' as char,
   };
 
   const getSuggestedSeed = (): string => {
@@ -519,6 +519,105 @@ export default function binaryMatrixAPI(context: Context, args: any) {
   };
 
   //#endregion helper functions
+  //#region render functions
+
+  const renderCard = (card: Card, up: boolean = card.up): string => {
+    const c = up ? 'XX' : `${card.value}${card.sign}`;
+    return colorize(c, up ? colors[card.sign] : ('C' as char));
+  };
+
+  const renderStack = (stack: Stack<Card>, up: boolean = stack[0].up): string => {
+    return renderCard(stack[0], up).replace(
+      / ┛[ICNlDFC]`/,
+      `\`\`A${rjust(String(stack.length), 2)}\``
+    );
+  };
+
+  const colorize = (str: string, col: char): string =>
+    `\`${col}${str.split('\n').join(`\`\n${col}\``)}\``;
+
+  const len_wo_colors = (str: string): number => {
+    let len = str.length;
+    len -= Math.floor(count(str, '`') / 2) * 3;
+    return len;
+  };
+
+  const rjust = (str: string, len: number, sym: string = ' '): string => {
+    for (; len_wo_colors(str) < len; ) {
+      str = sym + str;
+    }
+    return str;
+  };
+
+  const ljust = (str: string, len: number, sym: string = ' '): string => {
+    for (; len_wo_colors(str) < len; ) {
+      str += sym;
+    }
+    return str;
+  };
+
+  const count = (str: string, search: string): number => {
+    return str.split(search).length - 1;
+  };
+
+  const appendRight = (str1: string, str2: string): string => {
+    let s1 = str1.split('\n');
+    let s2 = str2.split('\n');
+    let res = [];
+    for (let i = 0; i < Math.max(s1.length, s2.length); i++) {
+      res.push((s1[i] || '') + (s2[i] || ''));
+    }
+    return res.join('\n');
+  };
+
+  const renderAllCards = (cards: Card[], force_visible: boolean = false) => {
+    return cards.map((el) => renderCard(el, force_visible ? true : undefined));
+  };
+
+  const renderCombatStacks = (lanes: State['lanes'], _for: pid, AttackerStack: boolean) => {
+    const __for = splitPid(_for);
+    const ret = [];
+    const whichTeam = AttackerStack ? 'attackerStack' : 'defenderStack';
+    for (let i = 0; i < lanes.length; i++) {
+      const lane = lanes[i];
+      ret.push(
+        `\`DAS${i}\`  ${renderAllCards(
+          lane[whichTeam].cards,
+          (__for.team === 'a') === AttackerStack
+        )}`
+      );
+    }
+    return ret.join('\n');
+  };
+
+  const renderLanes = (state: State) => {
+    const ret = [];
+    const lanes = state.lanes;
+    for (let i = 0; i < lanes.length; i++) {
+      const deck = lanes[i].laneDeck;
+      const discard = lanes[i].laneDiscard;
+
+      let l = `\`TL${i}\`   `;
+
+      l += renderCard(deck[0], i > 2);
+      l += ` \`A${deck.length} |`;
+      l += renderAllCards(discard);
+
+      ret.push(l);
+    }
+
+    let l = `\`Ta\`    `;
+
+    l += renderCard(state.attackerDeck[0]);
+    l += ` \`A${state.attackerDeck.length} |`;
+    l += renderAllCards(state.attackerDiscard);
+
+    ret.push(l);
+
+    return ret.join('\n');
+  };
+
+  //#endregion render functions
   //#region binmat game-functions
 
   const drawCard = (pid: pid, lane: laneNum | attackerDeckLane, game: Game): boolean => {
