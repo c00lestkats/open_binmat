@@ -1,4 +1,14 @@
-export default function binaryMatrixAPI(context: Context, args: any) {
+export default function binaryMatrix(
+  context: Context,
+  args: null | {
+    input?: unknown;
+    op?: unknown;
+    set?: unknown;
+    settings?: unknown;
+    gid?: unknown;
+    as?: unknown;
+  }
+) {
   //#region type definitions
   interface State {
     lanes: [Lane, Lane, Lane, Lane, Lane, Lane];
@@ -91,6 +101,13 @@ export default function binaryMatrixAPI(context: Context, args: any) {
     status: 'lobby' | 'ongoing' | 'completed';
     settings: Settings;
     nextOrd: pid[];
+    admin: string; // user who created game
+  }
+  interface Userdata {
+    _id: string; // binmat-<username>
+    current: string | null; // binmat id
+    type: 'binmat-userdata';
+    settings: any;
   }
   type _drawop = `d${laneNum | 'a'}`;
   type _discardop = `x${CardValues | cid}${laneNum | 'a'}`;
@@ -201,23 +218,46 @@ export default function binaryMatrixAPI(context: Context, args: any) {
     return r + n[r.charCodeAt(0) % 4].toString(16);
   };
 
+  const defaultSettings: Settings = {
+    timeMode: 'async',
+    turnTime: 5000,
+    turnLimit: 110,
+    ord: 'playerIndex',
+    discardOnInactive: true,
+    markInactiveTurns: 2,
+    kickOnInactive: false,
+    allowBrains: true,
+    allowMultipleControl: false,
+    seed: getSuggestedSeed(),
+  };
+
   function createLobby(settings?: Partial<Settings>): {
     ok: boolean;
     msg: string;
   } {
-    const defaultSettings: Settings = {
-      timeMode: 'async',
-      turnTime: 5000,
-      turnLimit: 110,
-      ord: 'playerIndex',
-      discardOnInactive: true,
-      markInactiveTurns: 2,
-      kickOnInactive: false,
-      allowBrains: true,
-      allowMultipleControl: false,
-      seed: getSuggestedSeed(),
+    const game: Partial<Game> = {
+      _id: $db.ObjectId().$oid,
+      settings: defaultSettings,
+      status: 'lobby',
+      type: 'binmat-game',
+      admin: context.caller,
+      players: [{ username: context.caller, team: 's' }],
     };
 
+    let set = setSettings(game, settings);
+
+    if (set.ok !== true) return set;
+
+    let r = $db.i(game as unknown as any)[0];
+    if (r.n !== 1) return { ok: false, msg: 'db insert failed, please try again' };
+
+    return { ok: true, msg: game._id };
+  }
+
+  function setSettings(
+    game: Partial<Game>,
+    settings?: Partial<Settings>
+  ): { ok: true } | { ok: false; msg: string } {
     if (settings) {
       let k = Object.keys(settings);
       let a = Object.keys(defaultSettings);
@@ -227,23 +267,15 @@ export default function binaryMatrixAPI(context: Context, args: any) {
 
     const _settings: Settings = { ...defaultSettings, ...settings };
 
-    const game: Partial<Game> = {
-      _id: $db.ObjectId(),
-      settings: _settings,
-      status: 'lobby',
-      type: 'binmat-game',
-    };
+    game.settings = _settings;
 
-    let r = $db.i(game as unknown as any)[0];
-    if (r.n !== 1) return { ok: false, msg: 'db insert failed, please try again' };
-
-    return { ok: true, msg: game._id };
+    return { ok: true };
   }
 
   function createGame(gameId: string, _seed: string, a0: string, d0: string): boolean {
     const seed = cyrb128(_seed);
     const r = sfc32(seed);
-    const rInt = (max: number): number => Math.floor(r() * max) + 1;
+    const rInt = (max: number): number => Math.floor(r() * (max + 1));
 
     // create array if all cards in play
     const availibleCards: DeckCard[] = [];
@@ -271,6 +303,7 @@ export default function binaryMatrixAPI(context: Context, args: any) {
       let availibleLanes: Lane[] = lanes.filter((el: Lane) => el.laneDeck.length < 13);
 
       availibleLanes[rInt(availibleLanes.length - 1)].laneDeck.push(card);
+      availibleCards.splice(availibleCards.indexOf(card), 1);
     }
     // turn top card in lanes 3-5 up
     for (let i = 3; i < 6; i++) {
@@ -286,20 +319,6 @@ export default function binaryMatrixAPI(context: Context, args: any) {
     };
 
     const gameState: Partial<Game> = {
-      players: [
-        {
-          username: a0,
-          team: 'a',
-          id: 'a0',
-          consecutiveNoOps: 0,
-        },
-        {
-          username: d0,
-          team: 'd',
-          id: 'd0',
-          consecutiveNoOps: 0,
-        },
-      ],
       state: boardState,
       seed,
       binlog: [],
@@ -307,8 +326,52 @@ export default function binaryMatrixAPI(context: Context, args: any) {
       queuedOps: {},
     };
 
-    return $db.u1({ _id: gameId }, gameState as unknown as any)[0].n === 1;
+    return $db.u1({ _id: gameId }, { $set: gameState } as unknown as any)[0].n === 1;
   }
+
+  const joinGameAs = (gameId: string, as: 'a' | 'd' | 's'): { ok: boolean; msg: string } => {
+    const g =
+      gameId === game?._id ? game : ($db.f({ _id: gameId }).first() as unknown as Partial<Game>);
+    if (!g || g.type !== 'binmat-game') return { ok: false, msg: 'game not found' };
+
+    const playerObj: any = { username: context.caller, team: as };
+
+    if (!g.players) return { ok: false, msg: 'game had no players array' };
+
+    const exist = g.players.filter((el) => el.username === playerObj.username);
+
+    if (!g.settings) return { ok: false, msg: 'game had no settings' };
+
+    const allowMultiple = g.settings.allowMultipleControl;
+
+    if (exist.find((el) => el.team === 'a' || el.team === 'd') && !allowMultiple)
+      return {
+        ok: false,
+        msg: 'This game does not allow you to join as multiple players, user switch command to switch team',
+      };
+
+    if (!exist.find((el) => el.team === 's') && playerObj.team !== 's') {
+      g.players.push({ username: context.caller, team: 's' });
+    }
+    if (exist.find((el) => el.team === 's') && playerObj.team === 's')
+      return { ok: true, msg: 'already joined this game' };
+
+    if (['a', 'd'].includes(playerObj.team)) {
+      const highestPlayerIndex = g.players
+        .filter((el) => el.team === playerObj.team)
+        .map((el) => Number(el.team.substring(1)))
+        .reduce((a, b) => (a > b ? a : b), -1);
+
+      playerObj.id = playerObj.team + (highestPlayerIndex + 1);
+      playerObj.consecutiveNoOps = 0;
+    }
+
+    g.players.push(playerObj);
+
+    $db.us({ _id: g._id }, { $set: g as any });
+
+    return { ok: true, msg: 'successfully joined' };
+  };
 
   //#endregion lobby functions
   //#region helper functions
@@ -522,7 +585,7 @@ export default function binaryMatrixAPI(context: Context, args: any) {
   //#region render functions
 
   const renderCard = (card: Card, up: boolean = card.up): string => {
-    const c = up ? 'XX' : `${card.value}${card.sign}`;
+    const c = up ? `${card.value}${card.sign}` : 'XX';
     return colorize(c, up ? colors[card.sign] : ('C' as char));
   };
 
@@ -581,10 +644,8 @@ export default function binaryMatrixAPI(context: Context, args: any) {
     for (let i = 0; i < lanes.length; i++) {
       const lane = lanes[i];
       ret.push(
-        `\`DAS${i}\`  ${renderAllCards(
-          lane[whichTeam].cards,
-          (__for.team === 'a') === AttackerStack
-        )}`
+        (AttackerStack ? `\`DAS${i}\`` : `\`PDS${i}\``) +
+          `  ${renderAllCards(lane[whichTeam].cards, (__for.team === 'a') === AttackerStack)}`
       );
     }
     return ret.join('\n');
@@ -599,8 +660,8 @@ export default function binaryMatrixAPI(context: Context, args: any) {
 
       let l = `\`TL${i}\`   `;
 
-      l += renderCard(deck[0], i > 2);
-      l += ` \`A${deck.length} |`;
+      l += renderCard(deck[deck.length - 1], i > 2);
+      l += ` \`A${rjust(deck.length.toString(), 2, '0')} \`|`;
       l += renderAllCards(discard);
 
       ret.push(l);
@@ -608,13 +669,26 @@ export default function binaryMatrixAPI(context: Context, args: any) {
 
     let l = `\`Ta\`    `;
 
-    l += renderCard(state.attackerDeck[0]);
-    l += ` \`A${state.attackerDeck.length} |`;
+    l +=
+      state.attackerDeck.length > 0
+        ? renderCard(state.attackerDeck[state.attackerDeck.length - 1])
+        : '  ';
+    l += ` \`A${rjust(state.attackerDeck.length.toString(), 2, '0')} \`|`;
     l += renderAllCards(state.attackerDiscard);
 
     ret.push(l);
 
     return ret.join('\n');
+  };
+
+  const renderBoard = (state: State, _for: pid) => {
+    let res = renderCombatStacks(state.lanes, _for, true);
+    res += '\n\n';
+    res += renderCombatStacks(state.lanes, _for, false);
+    res += '\n\n';
+    res += renderLanes(state);
+
+    return res;
   };
 
   //#endregion render functions
@@ -1086,4 +1160,111 @@ export default function binaryMatrixAPI(context: Context, args: any) {
   };
 
   const queueOp = (op: operation, game: Game) => {};
+
+  //#region script run
+
+  const userdata: Userdata = ($db
+    .f({ _id: `binmat-${context.caller}` })
+    .first() as unknown as Userdata) || {
+    _id: `binmat-${context.caller}`,
+    current: null,
+    type: 'binmat-userdata',
+  };
+
+  const game: Partial<Game> | null = userdata.current
+    ? ($db.f({ _id: userdata.current, type: 'binmat-game' }).first() as unknown as Partial<Game>)
+    : null;
+
+  if (!args) return 'this is binmat';
+
+  const inp = args.input || args.op;
+
+  let res;
+
+  main: if (typeof inp !== 'string') res = "whoops, that's not right";
+  else if (inp === 'create') {
+    res = createLobby();
+    userdata.current = res.msg;
+    res.msg = `Created loby with id ${res.msg}`;
+
+    break main;
+  } else if (inp === 'set' || inp === 'settings') {
+    if (game === null) {
+      res = { ok: false, msg: 'You are not currently in a lobby.' };
+      break main;
+    }
+    if (game.status !== 'lobby') {
+      res = { ok: false, msg: 'game has already begun, cannot change settings.' };
+      break main;
+    }
+    if (game.admin !== context.caller) {
+      res = { ok: false, msg: 'Only lobby creator can change settings' };
+      break main;
+    }
+    const _set = args.set || args.settings;
+    if (typeof _set !== 'object') {
+      res = { ok: false, msg: 'no `Nset`tings object provided' };
+    }
+
+    res = setSettings(game, _set as any);
+    $db.u1({ _id: game._id }, { $set: game as any });
+  } else if (inp === 'init') {
+    if (!game) {
+      res = { ok: false, msg: 'You are not currently in a lobby.' };
+      break main;
+    }
+    if (!game.settings || game.settings.seed === undefined) {
+      res = { ok: false, msg: 'err: game does not have seed set' };
+      break main;
+    }
+    if (!game.players) {
+      res = { ok: false, msg: 'err: no players found' };
+      break main;
+    }
+
+    const a0 = game.players.find((el) => 'id' in el && el.id === 'a0');
+    const d0 = game.players.find((el) => 'id' in el && el.id === 'd0');
+
+    if (!a0 || !d0) {
+      res = { ok: false, msg: 'err: a0 or d0 was not found' };
+      break main;
+    }
+
+    res = createGame(game._id, game.settings?.seed, a0.username, d0.username);
+  } else if (inp.startsWith('join')) {
+    const gid = args.gid || inp.split(' ')[1] || game?._id;
+    if (typeof gid !== 'string') {
+      res = { ok: false, msg: 'invalid gid' };
+      break main;
+    }
+
+    const as = args.as || inp.split(' ')[2] || 's';
+    if (typeof as !== 'string' || !['a', 'd', 's'].includes(as)) {
+      res = { ok: false, msg: 'invalid position' };
+      break main;
+    }
+
+    res = joinGameAs(gid, as as 'a' | 'd' | 's');
+  } else if (inp === 'view') {
+    if (!game || !game.state) return 'no';
+    try {
+      return renderBoard(game.state, 'a0');
+    } catch (e) {
+      return e.message + '\n' + e.stack;
+    }
+  }
+
+  // yeeah
+  if (
+    game &&
+    game.status !== 'lobby' &&
+    res &&
+    typeof res === 'object' &&
+    'ok' in res &&
+    res.ok === true
+  ) {
+    $db.u1({ _id: game._id }, { $set: game as any });
+  }
+  $db.us({ _id: userdata._id }, { $set: userdata as any });
+  return res;
 }
