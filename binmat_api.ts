@@ -349,7 +349,7 @@ export default function binaryMatrix(
     if (exist.find((el) => el.team === 'a' || el.team === 'd') && !allowMultiple)
       return {
         ok: false,
-        msg: 'This game does not allow you to join as multiple players, user switch command to switch team',
+        msg: 'This game does not allow you to join as multiple players, use switch command to switch team',
       };
 
     if (!exist.find((el) => el.team === 's') && playerObj.team !== 's') {
@@ -708,7 +708,7 @@ export default function binaryMatrix(
 
     let r = '\n';
 
-    const header = `binmat game \`M${game._id}\``;
+    const header = `binmat game \`M${game._id}\`  ${game.status}`;
     const w = Math.min(context.cols, 80);
 
     const s = [
@@ -1272,6 +1272,7 @@ export default function binaryMatrix(
       }
 
       res = setSettings(game, _set as any);
+      if (res.ok) res = renderLobby(game);
       $db.u1({ _id: game._id }, { $set: game as any });
     } else if (inp === 'init') {
       if (!game) {
@@ -1325,6 +1326,10 @@ export default function binaryMatrix(
       }
 
       res = joinGameAs(gid, as as 'a' | 'd' | 's');
+
+      if (res.ok) {
+        res.msg += '\n' + renderLobby($db.f({ _id: gid }).first() as unknown as Partial<Game>).msg;
+      }
     } else if (inp === 'view') {
       if (!game) {
         res = { ok: false, msg: 'no game' };
@@ -1342,6 +1347,13 @@ export default function binaryMatrix(
       }
 
       res = renderBoard(game.state, 'a0');
+    } else if (inp === 'lobby') {
+      if (!game) {
+        res = { ok: false, msg: 'no game' };
+        break main;
+      }
+
+      res = renderLobby(game);
     }
   } catch (e) {
     return e.message + '\n' + e.stack;
