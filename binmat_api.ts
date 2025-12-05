@@ -7,6 +7,7 @@ export default function binaryMatrix(
     settings?: unknown;
     gid?: unknown;
     as?: unknown;
+    v?: unknown;
   }
 ) {
   //#region type definitions
@@ -157,6 +158,45 @@ export default function binaryMatrix(
   const traceAttacker = '101000000';
 
   //#endregion type definitions
+  //#region logger
+
+  type LogEntry = { logLevel: LogLevel & number; entry: string };
+  type LogLevel = 0 | 1 | 2 | 3 | false | 4 | true | 5 | 6 | 7;
+
+  function getLogger(logLevel: LogLevel, debug: boolean = false) {
+    if (typeof logLevel === 'boolean') {
+      logLevel = logLevel ? 5 : 3;
+    }
+    const levels = ['`DCRI`', '`DERR`', '`JWRN`', '`HUNX`', '`QINF`', '`OINF`', '`hVER`', '`gTRC`'];
+    const _log: LogEntry[] = [];
+    const logger = {
+      log: (str: string, level: LogLevel & number) => {
+        const time = Date.now() - _ST;
+        let entry = `\`1[\`\`${'MKIGEWTXDx'[Math.floor(time / 500)]}${rjust(
+          time.toString(),
+          4,
+          '0'
+        )}\`\`1]\` \`1[\`${levels[level]}\`1]\` ${str}`;
+
+        _log.push({ logLevel: level, entry });
+        if (debug) $D(entry);
+      },
+      getLog: () => _log.filter((el) => el.logLevel <= logLevel).map((el) => el.entry),
+      getLogOnLevel: (level: LogLevel & number) =>
+        _log.filter((el) => el.logLevel <= level).map((el) => el.entry),
+    };
+    return logger;
+  }
+
+  const logger = getLogger(
+    args &&
+      args.v &&
+      (typeof args.v === 'boolean' || (typeof args.v === 'number' && args.v > 0 && args.v < 8))
+      ? (args.v as LogLevel)
+      : 4
+  );
+
+  //#endregionlogger
   //#region randomness functions
 
   function cyrb128(str: string): [number, number, number, number] {
@@ -231,9 +271,7 @@ export default function binaryMatrix(
     seed: getSuggestedSeed(),
   };
 
-  function createLobby(
-    settings?: Partial<Settings>
-  ): { ok: false; msg: string } | { ok: true; msg: string; _id: string } {
+  function createLobby(settings?: Partial<Settings>): false | { msg: string; _id: string } {
     const game: Partial<Game> = {
       _id: $db.ObjectId().$oid,
       settings: defaultSettings,
@@ -245,35 +283,40 @@ export default function binaryMatrix(
 
     let set = setSettings(game, settings);
 
-    if (set.ok !== true) return set;
+    if (set !== true) return set;
 
     let r = $db.i(game as unknown as any)[0];
-    if (r.n !== 1) return { ok: false, msg: 'db insert failed, please try again' };
+    if (r.n !== 1) {
+      logger.log('db inset failed, please try again', 0);
+      return false;
+    }
 
     const render = renderLobby(game);
 
-    return { ...render, _id: game._id };
+    if (!render) return false;
+
+    return { msg: render, _id: game._id };
   }
 
-  function setSettings(
-    game: Partial<Game>,
-    settings?: Partial<Settings>
-  ): { ok: true } | { ok: false; msg: string } {
+  function setSettings(game: Partial<Game>, settings?: Partial<Settings>): boolean {
     if (settings) {
       let k = Object.keys(settings);
       let a = Object.keys(defaultSettings);
       let f = k.filter((el) => !a.includes(el));
-      if (f.length !== 0) return { ok: false, msg: 'unkown settings detected: ' + f.join(', ') };
+      if (f.length !== 0) {
+        logger.log(`unkown settings detected : ${f.join(', ')}`, 1);
+        return false;
+      }
     }
 
     const _settings: Settings = { ...defaultSettings, ...settings };
 
     game.settings = _settings;
 
-    return { ok: true };
+    return true;
   }
 
-  function createGame(gameId: string, _seed: string, a0: string, d0: string): boolean {
+  function createGameState(game: Partial<Game>, _seed: string): boolean {
     const seed = cyrb128(_seed);
     const r = sfc32(seed);
     const rInt = (max: number): number => Math.floor(r() * (max + 1));
@@ -319,44 +362,55 @@ export default function binaryMatrix(
       hands: { attacker: [[]], defender: [[]] },
     };
 
-    const gameState: Partial<Game> = {
-      state: boardState,
-      seed,
-      binlog: [],
-      turn: 0,
-      queuedOps: {},
-      status: 'ongoing',
-    };
+    game.state = boardState;
+    game.seed = seed;
+    game.binlog = [];
+    game.turn = 0;
+    game.queuedOps = {};
+    game.status = 'ongoing';
 
-    return $db.u1({ _id: gameId }, { $set: gameState } as unknown as any)[0].n === 1;
+    return true;
   }
 
-  const joinGameAs = (gameId: string, as: 'a' | 'd' | 's'): { ok: boolean; msg: string } => {
+  const joinGameAs = (gameId: string, as: 'a' | 'd' | 's'): boolean => {
     const g =
       gameId === game?._id ? game : ($db.f({ _id: gameId }).first() as unknown as Partial<Game>);
-    if (!g || g.type !== 'binmat-game') return { ok: false, msg: 'game not found' };
+    if (!g || g.type !== 'binmat-game') {
+      logger.log('game not found', 1);
+      return false;
+    }
 
     const playerObj: any = { username: context.caller, team: as };
 
-    if (!g.players) return { ok: false, msg: 'game had no players array' };
+    if (!g.players) {
+      logger.log('game had no players array', 0);
+      return false;
+    }
 
     const exist = g.players.filter((el) => el.username === playerObj.username);
 
-    if (!g.settings) return { ok: false, msg: 'game had no settings' };
+    if (!g.settings) {
+      logger.log('game had no settings', 0);
+      return false;
+    }
 
     const allowMultiple = g.settings.allowMultipleControl;
 
-    if (exist.find((el) => el.team === 'a' || el.team === 'd') && !allowMultiple)
-      return {
-        ok: false,
-        msg: 'This game does not allow you to join as multiple players, use switch command to switch team',
-      };
+    if (exist.find((el) => el.team === 'a' || el.team === 'd') && !allowMultiple) {
+      logger.log(
+        'This game does not allow you to join as multiple players, use switch command to switch team',
+        2
+      );
+      return false;
+    }
 
     if (!exist.find((el) => el.team === 's') && playerObj.team !== 's') {
       g.players.push({ username: context.caller, team: 's' });
     }
-    if (exist.find((el) => el.team === 's') && playerObj.team === 's')
-      return { ok: true, msg: 'already joined this game' };
+    if (exist.find((el) => el.team === 's') && playerObj.team === 's') {
+      logger.log('already joined game, skipping', 4);
+      return true;
+    }
 
     if (['a', 'd'].includes(playerObj.team)) {
       const highestPlayerIndex = g.players
@@ -373,7 +427,8 @@ export default function binaryMatrix(
     userdata.current = g._id;
     $db.us({ _id: g._id }, { $set: g as any });
 
-    return { ok: true, msg: 'successfully joined' };
+    logger.log('successfully joined game', 5);
+    return true;
   };
 
   //#endregion lobby functions
@@ -694,10 +749,16 @@ export default function binaryMatrix(
     return res;
   };
 
-  const renderLobby = (game: Partial<Game>): { ok: boolean; msg: string } => {
-    if (!game.players || !game.settings)
-      return { ok: false, msg: 'could not render lobby, do not have settings and/or players' };
-
+  const renderLobby = (game: Partial<Game>): false | string => {
+    if (!game.players || !game.settings) {
+      logger.log(
+        `Game had no ${
+          game.players ? 'settings' : game.settings ? 'player' : 'settings or players'
+        }`,
+        1
+      );
+      return false;
+    }
     // filter spec right of users who are also there as a player, does not need to be displayed
     const players = game.players.filter((el, ix, arr) =>
       el.team === 's'
@@ -743,7 +804,7 @@ export default function binaryMatrix(
       p.map((el) => ljust(el, ml.p)).join('\n')
     );
 
-    return { ok: true, msg: r };
+    return r;
   };
 
   //#endregion render functions
@@ -1245,51 +1306,60 @@ export default function binaryMatrix(
         };
       }
 
-      res = createLobby();
-      if (res.ok) {
-        userdata.current = res._id;
-        //@ts-ignore
-        delete res._id;
+      res = createLobby() as any;
+      if (res === false) {
+        res = logger.getLog();
+        break main;
       }
+
+      userdata.current = res._id;
+      delete res._id;
+      res.ok = true;
 
       break main;
     } else if (inp === 'set' || inp === 'settings') {
       if (game === null) {
-        res = { ok: false, msg: 'You are not currently in a lobby.' };
+        logger.log('You are not currently in a lobby, cannot set settings.', 4);
         break main;
       }
       if (game.status !== 'lobby') {
-        res = { ok: false, msg: 'game has already begun, cannot change settings.' };
+        logger.log('game has already begun, cannot change settings.', 4);
         break main;
       }
       if (game.admin !== context.caller) {
-        res = { ok: false, msg: 'Only lobby creator can change settings' };
+        logger.log('Only lobby creator can change settings', 4);
         break main;
       }
       const _set = args.set || args.settings;
       if (typeof _set !== 'object') {
-        res = { ok: false, msg: 'no `Nset`tings object provided' };
+        logger.log('no `Nset`tings object provided, skipping', 2);
+        break main;
       }
 
-      res = setSettings(game, _set as any);
-      if (res.ok) res = renderLobby(game);
-      $db.u1({ _id: game._id }, { $set: game as any });
+      let r = setSettings(game, _set as any);
+      if (r === true) {
+        let lobby = renderLobby(game);
+        if (!lobby) {
+          break main;
+        }
+        res = { ok: true, msg: lobby };
+      }
     } else if (inp === 'init') {
       if (!game) {
-        res = { ok: false, msg: 'You are not currently in a lobby.' };
+        logger.log('You are not currently in a lobby, cannot init game.', 4);
         break main;
       }
       if (game.status !== 'lobby') {
-        res = { ok: false, msg: 'The game you are in has already started' };
+        logger.log('The game you are in has already started', 4);
         break main;
       }
 
       if (!game.settings || game.settings.seed === undefined) {
-        res = { ok: false, msg: 'err: game does not have seed set' };
+        logger.log('game does not have seed set', 0);
         break main;
       }
       if (!game.players) {
-        res = { ok: false, msg: 'err: no players found' };
+        logger.log('no players array found', 0);
         break main;
       }
 
@@ -1297,42 +1367,47 @@ export default function binaryMatrix(
       const d0 = game.players.find((el) => 'id' in el && el.id === 'd0');
 
       if (!a0 || !d0) {
-        res = { ok: false, msg: 'err: a0 or d0 was not found' };
+        logger.log('err: a0 or d0 was not found', 1);
         break main;
       }
 
-      res = createGame(game._id, game.settings?.seed, a0.username, d0.username);
+      let r = createGameState(game, game.settings?.seed);
+      if (r === true) {
+        let lobby = renderLobby(game);
+        if (lobby === false) break main;
+        res = { ok: true, msg: lobby };
+      }
     } else if (inp.startsWith('join')) {
       const gid = args.gid || inp.split(' ')[1] || game?._id;
       if (typeof gid !== 'string') {
-        res = { ok: false, msg: 'invalid gid' };
+        logger.log('invalid gameId (`Ngid`), skipping', 2);
         break main;
       }
 
       if (userdata.current != gid) {
         if (game && game.status !== 'completed' && game._id !== gid) {
-          res = {
-            ok: false,
-            msg: `you are already in game ${game._id} leave it to join a new one`,
-          };
+          logger.log(`you are already in game ${game._id} leave it to join a new one`, 2);
           break main;
         }
       }
 
       const as = args.as || inp.split(' ')[2] || 's';
       if (typeof as !== 'string' || !['a', 'd', 's'].includes(as)) {
-        res = { ok: false, msg: 'invalid position' };
+        logger.log('invalid position to join `Nas`', 2);
         break main;
       }
 
-      res = joinGameAs(gid, as as 'a' | 'd' | 's');
+      let r = joinGameAs(gid, as as 'a' | 'd' | 's');
 
-      if (res.ok) {
-        res.msg += '\n' + renderLobby($db.f({ _id: gid }).first() as unknown as Partial<Game>).msg;
+      if (r == true) {
+        let lobby = renderLobby($db.f({ _id: gid }).first() as unknown as Partial<Game>);
+        if (lobby === false) break main;
+
+        res = { ok: true, msg: lobby };
       }
     } else if (inp === 'view') {
       if (!game) {
-        res = { ok: false, msg: 'no game' };
+        logger.log('You are not in a game or lobby', 4);
         break main;
       }
 
@@ -1342,33 +1417,30 @@ export default function binaryMatrix(
       }
 
       if (!game.state) {
-        res = { ok: false, msg: 'no game state' };
+        logger.log('Game has been initialized wrong', 0);
         break main;
       }
 
-      res = renderBoard(game.state, 'a0');
+      res = { ok: true, msg: renderBoard(game.state, 'a0') };
     } else if (inp === 'lobby') {
       if (!game) {
-        res = { ok: false, msg: 'no game' };
+        logger.log('You are not in a game or lobby', 4);
         break main;
       }
 
-      res = renderLobby(game);
+      let lobby = renderLobby(game);
+      if (lobby === false) break main;
+
+      res = { ok: true, msg: lobby };
     }
   } catch (e) {
-    return e.message + '\n' + e.stack;
+    return e.message + '\n' + e.stack + '\n\n' + logger.getLogOnLevel(6);
   }
   // yeeah
-  if (
-    game &&
-    game.status !== 'lobby' &&
-    res &&
-    typeof res === 'object' &&
-    'ok' in res &&
-    res.ok === true
-  ) {
+  if (game && res && typeof res === 'object' && 'ok' in res && res.ok === true) {
     $db.u1({ _id: game._id }, { $set: game as any });
   }
+  if (!res) res = logger.getLog();
   $db.us({ _id: userdata._id }, { $set: userdata as any });
   return res;
 }
