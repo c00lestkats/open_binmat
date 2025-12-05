@@ -8,6 +8,7 @@ export default function binaryMatrix(
     gid?: unknown;
     as?: unknown;
     v?: unknown;
+    d?: unknown;
   }
 ) {
   //#region type definitions
@@ -193,7 +194,8 @@ export default function binaryMatrix(
       args.v &&
       (typeof args.v === 'boolean' || (typeof args.v === 'number' && args.v > 0 && args.v < 8))
       ? (args.v as LogLevel)
-      : 4
+      : 4,
+    args && args.d !== undefined ? true : false
   );
 
   //#endregionlogger
@@ -354,12 +356,20 @@ export default function binaryMatrix(
       lanes[i].laneDeck[12].up = true;
     }
 
+    if (!game.players) {
+      logger.log('Could not finds players', 0);
+      return false;
+    }
+
+    const attackerCount = game.players.filter((el) => el.team === 'a').length;
+    const defenderCount = game.players.filter((el) => el.team === 'd').length;
+
     // put together state
     const boardState: State = {
       lanes: lanes as [Lane, Lane, Lane, Lane, Lane, Lane],
       attackerDeck: [],
       attackerDiscard: [],
-      hands: { attacker: [[]], defender: [[]] },
+      hands: { attacker: Array(attackerCount).fill([]), defender: Array(defenderCount).fill([]) },
     };
 
     game.state = boardState;
@@ -369,6 +379,8 @@ export default function binaryMatrix(
     game.queuedOps = {};
     game.status = 'ongoing';
 
+    game.nextOrd = setNextOrd(game as Game);
+
     return true;
   }
 
@@ -377,6 +389,10 @@ export default function binaryMatrix(
       gameId === game?._id ? game : ($db.f({ _id: gameId }).first() as unknown as Partial<Game>);
     if (!g || g.type !== 'binmat-game') {
       logger.log('game not found', 1);
+      return false;
+    }
+    if (g.status !== 'lobby') {
+      logger.log('This game is not a lobby', 4);
       return false;
     }
 
@@ -739,12 +755,30 @@ export default function binaryMatrix(
     return ret.join('\n');
   };
 
+  const renderHands = (state: State, _for: pid, AttackerHands: boolean = true) => {
+    const __for = splitPid(_for);
+    const whichTeam = AttackerHands ? 'attacker' : 'defender';
+    const ret = [];
+    for (let i = 0; i < state.hands[whichTeam].length; i++) {
+      const hand = state.hands[whichTeam][i];
+      ret.push(
+        (AttackerHands ? `\`Da${i}\`` : `\`Pd${i}\``) +
+          `  ${renderAllCards(hand, (__for.team === 'a') === AttackerHands)}`
+      );
+    }
+    return ret.join('\n');
+  };
+
   const renderBoard = (state: State, _for: pid) => {
     let res = renderCombatStacks(state.lanes, _for, true);
     res += '\n\n';
     res += renderCombatStacks(state.lanes, _for, false);
     res += '\n\n';
     res += renderLanes(state);
+    res += '\n\n';
+    res += renderHands(state, _for, _for[0] === 'd');
+    res += '\n\n';
+    res += renderHands(state, _for, _for[0] === 'a' || _for[0] !== 'd');
 
     return res;
   };
@@ -811,6 +845,7 @@ export default function binaryMatrix(
   //#region binmat game-functions
 
   const drawCard = (pid: pid, lane: laneNum | attackerDeckLane, game: Game): boolean => {
+    logger.log(`drawing function entered with pid ${pid}, lane ${lane}`, 7);
     // get player drawing
     const p = splitPid(pid);
 
@@ -829,7 +864,7 @@ export default function binaryMatrix(
       if (discard.length === 0) {
         // invalid op if defender or lane 6, attacker win otherwise
         if (lane === 6 || p.team === 'd') return false;
-        throw new Error('win function not implemented');
+        return endGame(game, 'a');
       }
       // if deck is empty shuffle discard into deck
       deck.push(...shuffleArray(discard, r));
@@ -1068,6 +1103,10 @@ export default function binaryMatrix(
     return true;
   };
 
+  const endGame = (game: Game, winner: 'a' | 'd') => {
+    throw new Error('team ' + winner + ' won, win function not implemented tho');
+  };
+
   //#endregion binmat functions
   //#region script logic
 
@@ -1133,9 +1172,12 @@ export default function binaryMatrix(
   }
 
   const runOp = (as: pid, op: operation, game: Game): boolean => {
+    logger.log('running ' + op + ' as ' + as, 6);
+
     // by running a general validation we don't need to verify correct syntax anymore
     // and can expect only operations that are parse-able
     if (!checkOpSyntax(op)) return false;
+    logger.log('syntax was valid', 6);
 
     switch (op[0]) {
       case 'd':
@@ -1232,9 +1274,12 @@ export default function binaryMatrix(
     }
   };
 
-  const kickPlayer = (pid: pid, game: Game) => {};
+  const kickPlayer = (pid: pid, game: Game) => {
+    // TODO
+  };
 
   const runTurn = (game: Game) => {
+    logger.log('turn start', 6);
     const players: Player[] = game.players.filter(
       (el) => el.team === 'a' || el.team === 'd'
     ) as Player[];
@@ -1269,13 +1314,52 @@ export default function binaryMatrix(
     }
 
     game.turn++;
+    game.queuedOps = {};
 
     if (team === 'a') setNextOrd(game);
 
     game.lastTurn = Date.now();
+
+    return true;
   };
 
-  const queueOp = (op: operation, game: Game) => {};
+  const queueOp = (op: operation, as: pid, game: Game) => {
+    const ops = game.queuedOps;
+
+    const turnOf = game.turn % 2 === 0 ? 'd' : 'a';
+
+    if (as[0] !== turnOf) {
+      logger.log('it is not your turn', 4);
+      return false;
+    }
+
+    if (ops[as]) {
+      logger.log('you have already submitted an op', 4);
+      return false;
+    }
+
+    if (!checkOpSyntax(op)) {
+      logger.log('invalid op syntax', 2);
+      return false;
+    }
+
+    ops[as] = op;
+
+    const players = game.players.filter((el) => 'id' in el && el.team == turnOf);
+
+    const notSubmitted = [];
+    for (let player of players) {
+      if (ops[player.id] === undefined) notSubmitted.push(player.id);
+    }
+
+    if (notSubmitted.length === 0) {
+      logger.log('all players have submitted an op, running turn', 4);
+      return runTurn(game);
+    }
+    logger.log('not all players have submitted an op, saved op', 4);
+    logger.log(`players ${notSubmitted.join(', ')} have not submitted an op`, 6);
+    return true;
+  };
 
   //#region script run
 
@@ -1421,7 +1505,36 @@ export default function binaryMatrix(
         break main;
       }
 
-      res = { ok: true, msg: renderBoard(game.state, 'a0') };
+      const is = game.players
+        .filter((el) => el.username === context.caller && 'id' in el)
+        .map((el) => el.id);
+
+      if (is.length === 0) {
+        logger.log('you are not a player in this game, you cannot submit ops', 4);
+        break main;
+      }
+
+      if (is.length > 1 && !args.as) {
+        logger.log(
+          'You are playing multiple positions in this game, please specify `Nas` who you want to view',
+          4
+        );
+        break main;
+      }
+
+      if (args.as && !is.includes(args.as)) {
+        logger.log('You are not playing this position', 4);
+        break main;
+      }
+
+      const _as = args.as || is[0];
+
+      if (!_as) {
+        logger.log('do not know your position', 0);
+        break main;
+      }
+
+      res = { ok: true, msg: renderBoard(game.state, _as) };
     } else if (inp === 'lobby') {
       if (!game) {
         logger.log('You are not in a game or lobby', 4);
@@ -1432,6 +1545,56 @@ export default function binaryMatrix(
       if (lobby === false) break main;
 
       res = { ok: true, msg: lobby };
+    } else {
+      if (!game) {
+        logger.log('You are not in a game or lobby', 4);
+        break main;
+      }
+      if (game.status !== 'ongoing') {
+        logger.log('You are not in an ongoing game or lobby', 4);
+        break main;
+      }
+      if (!game.players) {
+        logger.log('no players array found', 0);
+        break main;
+      }
+      if (!game.state) {
+        logger.log('no state found', 0);
+        break main;
+      }
+      const is = game.players
+        .filter((el) => el.username === context.caller && 'id' in el)
+        .map((el) => el.id);
+
+      if (is.length === 0) {
+        logger.log('you are not a player in this game, you cannot submit ops', 4);
+        break main;
+      }
+
+      if (is.length > 1 && !args.as) {
+        logger.log(
+          'You are playing multiple positions in this game, please specify `Nas` who you want to submit',
+          4
+        );
+        break main;
+      }
+
+      if (args.as && !is.includes(args.as)) {
+        logger.log('You are not playing this position', 4);
+        break main;
+      }
+
+      const _as = args.as || is[0];
+
+      if (!_as) {
+        logger.log('do not know your position', 0);
+        break main;
+      }
+
+      let r = queueOp(inp as operation, _as, game as Game);
+
+      if (r === false) break main;
+      res = { ok: true, msg: 'submitted.' };
     }
   } catch (e) {
     return e.message + '\n' + e.stack + '\n\n' + logger.getLogOnLevel(6);
