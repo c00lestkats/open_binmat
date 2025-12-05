@@ -9,6 +9,7 @@ export default function binaryMatrix(
     as?: unknown;
     v?: unknown;
     d?: unknown;
+    log?: unknown;
   }
 ) {
   //#region type definitions
@@ -194,9 +195,15 @@ export default function binaryMatrix(
       args.v &&
       (typeof args.v === 'boolean' || (typeof args.v === 'number' && args.v > 0 && args.v < 8))
       ? (args.v as LogLevel)
-      : 4,
+      : 7,
     args && args.d !== undefined ? true : false
   );
+
+  // TODO REMOVE
+
+  logger.log('This script is in test mode', 4);
+  args = args || {};
+  args.log = true;
 
   //#endregionlogger
   //#region randomness functions
@@ -525,13 +532,20 @@ export default function binaryMatrix(
     // romves specified card from players hand and returns it
     // return undefined if card is not present
     const p = splitPid(pid);
+    logger.log('getting card from hand', 7);
+
+    logger.log(`searching for ${value}${sign || '*'} in hand ${pid}`, 6);
 
     const hand = state.hands[p.teamlong][hexToDec(p.num)];
+    logger.log(`hand: ${renderAllCards(hand, true)}`, 7);
+
     if (!Array.isArray(hand)) throw new Error('player hand was not an array');
 
     const fitsValue = hand.filter((el) => el.value === value);
+    logger.log(`fitsValue: ${renderAllCards(fitsValue, true)}`, 7);
 
-    if (fitsValue.length > 1 && sign === undefined) return;
+    if (fitsValue.length > 1 && sign === undefined)
+      return hand.splice(hand.indexOf(fitsValue[0]), 1)[0];
     if (fitsValue.length === 0) return;
     if (sign !== undefined) {
       const c = fitsValue.find((el) => el.sign === sign);
@@ -573,7 +587,7 @@ export default function binaryMatrix(
     return nextPowerOfTwo;
   };
 
-  const cardToCid = (c: Card) => c.value + c.sign;
+  const cardToCid = (c: Card) => c.value.toString() + (c.sign || '*');
   const displayCards = (
     cards: Card[],
     isTeam: boolean = true,
@@ -663,28 +677,21 @@ export default function binaryMatrix(
     return colorize(c, up ? colors[card.sign] : ('C' as char));
   };
 
-  const renderStack = (stack: Stack<Card>, up: boolean = stack[0].up): string => {
-    return renderCard(stack[0], up).replace(
-      / ┛[ICNlDFC]`/,
-      `\`\`A${rjust(String(stack.length), 2)}\``
-    );
-  };
-
   const colorize = (str: string, col: char): string =>
     `\`${col}${str.split('\n').join(`\`\n${col}\``)}\``;
 
-  const len_wo_colors = (str: string): number => {
+  function len_wo_colors(str: string): number {
     let len = str.length;
     len -= Math.floor(count(str, '`') / 2) * 3;
     return len;
-  };
+  }
 
-  const rjust = (str: string, len: number, sym: string = ' '): string => {
+  function rjust(str: string, len: number, sym: string = ' '): string {
     for (; len_wo_colors(str) < len; ) {
       str = sym + str;
     }
     return str;
-  };
+  }
 
   const ljust = (str: string, len: number, sym: string = ' '): string => {
     for (; len_wo_colors(str) < len; ) {
@@ -693,9 +700,9 @@ export default function binaryMatrix(
     return str;
   };
 
-  const count = (str: string, search: string): number => {
+  function count(str: string, search: string): number {
     return str.split(search).length - 1;
-  };
+  }
 
   const appendRight = (str1: string, str2: string): string => {
     let s1 = str1.split('\n');
@@ -708,7 +715,7 @@ export default function binaryMatrix(
   };
 
   const renderAllCards = (cards: Card[], force_visible: boolean = false) => {
-    return cards.map((el) => renderCard(el, force_visible ? true : undefined));
+    return cards.map((el) => renderCard(el, force_visible ? true : undefined)).join(' ');
   };
 
   const renderCombatStacks = (lanes: State['lanes'], _for: pid, AttackerStack: boolean) => {
@@ -734,7 +741,7 @@ export default function binaryMatrix(
 
       let l = `\`TL${i}\`   `;
 
-      l += renderCard(deck[deck.length - 1], i > 2);
+      l += deck.length > 0 ? renderCard(deck[deck.length - 1], i > 2) : '  ';
       l += ` \`A${rjust(deck.length.toString(), 2, '0')} \`|`;
       l += renderAllCards(discard);
 
@@ -853,21 +860,33 @@ export default function binaryMatrix(
     const state = game.state;
 
     // get relevant stacks
-    const { deck, discard } = getLane(lane, state);
+    const { deck, discard, defenderStack } = getLane(lane, state);
     const hand = state.hands[p.teamlong][hexToDec(p.num)];
     if (!Array.isArray(hand)) throw new Error('player hand was not an array');
+
+    if (defenderStack && defenderStack.cards.length > 0 && p.team === 'a') {
+      logger.log('lane is defended, cannot draw', 4);
+      return false;
+    }
 
     // defender can't draw from attcker deck
     if (p.team === 'd' && lane === 6) return false;
 
     if (deck.length === 0) {
+      logger.log('deck empty', 5);
       if (discard.length === 0) {
         // invalid op if defender or lane 6, attacker win otherwise
         if (lane === 6 || p.team === 'd') return false;
         return endGame(game, 'a');
       }
       // if deck is empty shuffle discard into deck
-      deck.push(...shuffleArray(discard, r));
+      logger.log('shuffling discard into deck', 5);
+      deck.push(
+        ...shuffleArray(discard, r).map((el: Card) => {
+          el.up = false;
+          return el;
+        })
+      );
       discard.splice(0, discard.length);
       // if is visible lane, make top card visible
       if (lane < 6 && lane > 2) deck[deck.length - 1].up = true;
@@ -877,7 +896,8 @@ export default function binaryMatrix(
 
     // draw card
     const card = deck.pop() as Card;
-    if (lane < 6 && lane > 2) {
+    logger.log('drawn card: ' + cardToCid(card), 4);
+    if (lane < 6 && lane > 2 && deck.length > 0) {
       // if one of the open decks, make next card visible
       deck[deck.length - 1].up = true;
     }
@@ -885,6 +905,8 @@ export default function binaryMatrix(
     // set card visibility to team
     card.up = false;
     hand.push(card as HandCard);
+
+    logger.log('new hand ' + renderAllCards(hand, true), 6);
 
     return true;
   };
@@ -895,6 +917,10 @@ export default function binaryMatrix(
     card: SpecifiedCard,
     game: Game
   ): boolean => {
+    logger.log(
+      `entered discard function with pid ${pid}, lane ${lane}, card ${cardToCid(card as Card)}`,
+      7
+    );
     // get player discarding
     const p = splitPid(pid);
 
@@ -910,7 +936,10 @@ export default function binaryMatrix(
     // remove from hand
     let discardCard = spliceCardFromHand(pid, state, card.value, card.sign) as Card | undefined;
 
-    if (discardCard === undefined) return false;
+    if (discardCard === undefined) {
+      logger.log('did not get card', 3);
+      return false;
+    }
 
     // make visible and add to discard
     discardCard.up = true;
@@ -918,6 +947,7 @@ export default function binaryMatrix(
 
     // if attacker discards to attacker discard, they draw two cards from attacker deck
     if (lane === 6) {
+      logger.log('was discard to attackerDiscard, drawing 2 cards from attackerDeck', 5);
       drawCard(pid, lane, game);
       drawCard(pid, lane, game);
     }
@@ -932,6 +962,12 @@ export default function binaryMatrix(
     game: Game,
     up: boolean = false
   ): boolean => {
+    logger.log(
+      `entered playing funciton with pid ${pid}, lane ${lane}, card ${cardToCid(
+        card as Card
+      )}, up ${up}`,
+      7
+    );
     // get player playing card
     const p = splitPid(pid);
 
@@ -942,24 +978,44 @@ export default function binaryMatrix(
     const stacks = { attacker, defender };
     const stack = stacks[p.teamlong];
 
+    //TODO
+    //if (stack.force_visible && !up) {
+    //  logger.log('tried to play up card on force-up stack, invalid op', 4);
+    //  return false;
+    //}
+
     const hand = state.hands[p.teamlong][hexToDec(p.num)];
     if (!Array.isArray(hand)) throw new Error('player hand was not an array');
 
     // > cannot be played on emtpy stacks
     // ? cannot be played face-up on non-empty stacks by attackers
-    if (card.value === '>' && stack.cards.length === 0) return false;
-    if (card.value === '?' && up && stack.cards.length === 0 && p.team === 'a') return false;
+    if (card.value === '>' && stack.cards.length === 0) {
+      logger.log("tried to play '>' on empty lane, aborting", 3);
+      return false;
+    }
+    if (card.value === '?' && up && stack.cards.length === 0 && p.team === 'a') {
+      logger.log("tried to play '?' face-up as attacker on non-empty stack", 3);
+      return false;
+    }
 
     // remove from hand
     const _card = spliceCardFromHand(pid, state, card.value, card.sign) as Card | undefined;
-    if (_card === undefined) return false;
+
+    if (_card === undefined) {
+      logger.log('did not get card, aborting', 3);
+      return false;
+    }
+    logger.log(`got card ${cardToCid(_card)}`, 6);
 
     // play to deck
     _card.up = up;
     stack.cards.push(_card as PlayedCard);
 
     // if face-up ? or > initiate combat
-    if (up && (_card.value === '>' || _card.value === '?')) combat(pid, lane, game, true);
+    if (up && (_card.value === '>' || _card.value === '?')) {
+      logger.log('combat was initiated by played card', 4);
+      return combat(pid, lane, game, true);
+    }
 
     return true;
   };
@@ -976,6 +1032,7 @@ export default function binaryMatrix(
   };
 
   const combat = (pid: pid, lane: laneNum, game: Game, fromBreak: boolean = false): boolean => {
+    logger.log(`entering combat with pid ${pid}, lane ${lane}`, 6);
     // get teams
     const p = splitPid(pid);
     const o: { team: 'a' | 'd'; teamlong: 'attacker' | 'defender' } =
@@ -988,21 +1045,37 @@ export default function binaryMatrix(
     const stacks = { attacker: attackerStack, defender: defenderStack };
     const discards = { attacker: _attackerDiscard, defender: discard };
 
-    if (p.teamlong == 'defender' && !fromBreak) return false;
+    if (p.teamlong == 'defender' && !fromBreak) {
+      logger.log('defender inited combat not from break, not allowed', 4);
+      return false;
+    }
+
+    logger.log(
+      `stacks: ${renderAllCards(stacks.attacker.cards, true)} / ${renderAllCards(
+        stacks.defender.cards,
+        true
+      )}`,
+      5
+    );
 
     // resolve traps
-    const attackingTraps = stacks[o.teamlong].cards.filter((el) => el.value === '@');
+    logger.log('resolving traps', 7);
+    const attackingTraps = stacks[p.teamlong].cards.filter((el) => el.value === '@');
+    logger.log(`player who inited combat has ${attackingTraps.length} traps`, 6);
     for (let i = 0; i < attackingTraps.length; i++) {
       let c = stacks[o.teamlong].cards.pop() as Card | undefined;
       if (c === undefined) break;
+      logger.log(`sending ${cardToCid(c)} to discard of ${o.teamlong}`, 6);
       c.up = true;
       discards[p.teamlong].push(c as DiscardedCard);
     }
 
-    const defendingTraps = stacks[p.teamlong].cards.filter((el) => el.value === '@');
+    const defendingTraps = stacks[o.teamlong].cards.filter((el) => el.value === '@');
     for (let i = 0; i < defendingTraps.length; i++) {
+      logger.log(`player who didn't init combat has ${defendingTraps.length} traps`, 6);
       let c = stacks[p.teamlong].cards.pop() as Card | undefined;
       if (c === undefined) break;
+      logger.log(`sending ${cardToCid(c)} to discard of ${o.teamlong}`, 6);
       c.up = true;
       discards[o.teamlong].push(c as DiscardedCard);
     }
@@ -1013,12 +1086,15 @@ export default function binaryMatrix(
       defender: calcStackPow(stacks.defender.cards),
     };
 
+    logger.log(`calculated power attacker: ${pow.attacker}, defender: ${pow.defender}`, 6);
+
     // resolve ?
     const bounces = {
       attacker: stacks.attacker.cards.filter((el) => el.value === '?'),
       defender: stacks.defender.cards.filter((el) => el.value === '?'),
     };
     if (bounces.attacker.length > 0 || bounces.defender.length > 0) {
+      logger.log('bounce detected, bouncing combat', 6);
       // discard bounces to opponent discard
       for (let bounce of bounces.attacker) {
         let ix = stacks.attacker.cards.indexOf(bounce);
@@ -1037,8 +1113,10 @@ export default function binaryMatrix(
     }
 
     // if both stacks are pow 0, bounce
-    if (pow.attacker === 0 && pow.defender === 0)
+    if (pow.attacker === 0 && pow.defender === 0) {
+      logger.log('both stacks had pow 0, bouncing', 6);
       return bounceCombat(stacks.attacker, stacks.defender, discards.attacker);
+    }
 
     // resolve combat winner
     const powDiff = pow.attacker - pow.defender;
@@ -1063,12 +1141,19 @@ export default function binaryMatrix(
       ...stacks.attacker.cards.filter((el) => el.value === '>'),
       ...stacks.defender.cards.filter((el) => el.value === '>'),
     ];
+
+    // calc damage
     const damage =
       breaks.length !== 0
         ? // if > present, calculate > damage
           Math.max(pow.attacker, stacks.defender.cards.length)
         : // else damage = pow as - pow ds + 1
           powDiff + 1;
+
+    // discard as
+    let cards = stacks.attacker.cards.splice(0, stacks.attacker.cards.length);
+    cards.forEach((el) => (el.up = true));
+    discards.attacker.push(...(cards as DiscardedCard[]));
 
     //resolve damage
     for (let i = 0; i < damage; i++) {
@@ -1094,11 +1179,6 @@ export default function binaryMatrix(
         drawCard(usePid, lane, game);
       }
     }
-
-    // discard as
-    let cards = stacks.attacker.cards.splice(0, stacks.attacker.cards.length);
-    cards.forEach((el) => (el.up = true));
-    discards.attacker.push(...(cards as DiscardedCard[]));
 
     return true;
   };
@@ -1155,6 +1235,7 @@ export default function binaryMatrix(
     // second char has to be a cardValue
     if (!cardValues.map((el) => String(el)).includes(op[1])) return false;
     let cardVal = op[1] as CardValues;
+    if (!Number.isNaN(Number(cardVal))) cardVal = Number(cardVal) as CardValues & number;
     let cardSign;
     // third char can be a cardSign | laneNum | attackerLaneNum
     let l = op[2] as CardSigns | `${laneNum}` | 'a';
@@ -1279,7 +1360,8 @@ export default function binaryMatrix(
   };
 
   const runTurn = (game: Game) => {
-    logger.log('turn start', 6);
+    if (game.turn === game.settings.turnLimit) return endGame(game, 'd');
+    logger.log(`running turn ${game.turn}`, 6);
     const players: Player[] = game.players.filter(
       (el) => el.team === 'a' || el.team === 'd'
     ) as Player[];
@@ -1605,5 +1687,10 @@ export default function binaryMatrix(
   }
   if (!res) res = logger.getLog();
   $db.us({ _id: userdata._id }, { $set: userdata as any });
+  if (args.d) $D(res);
+  if (args.log)
+    typeof res === 'string'
+      ? (res += '\nlog:\n\n' + logger.getLog().join('\n'))
+      : (res.msg += '\nlog:\n\n' + logger.getLog().join('\n'));
   return res;
 }
