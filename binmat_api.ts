@@ -231,10 +231,9 @@ export default function binaryMatrix(
     seed: getSuggestedSeed(),
   };
 
-  function createLobby(settings?: Partial<Settings>): {
-    ok: boolean;
-    msg: string;
-  } {
+  function createLobby(
+    settings?: Partial<Settings>
+  ): { ok: false; msg: string } | { ok: true; msg: string; _id: string } {
     const game: Partial<Game> = {
       _id: $db.ObjectId().$oid,
       settings: defaultSettings,
@@ -251,7 +250,9 @@ export default function binaryMatrix(
     let r = $db.i(game as unknown as any)[0];
     if (r.n !== 1) return { ok: false, msg: 'db insert failed, please try again' };
 
-    return { ok: true, msg: game._id };
+    const render = renderLobby(game);
+
+    return { ...render, _id: game._id };
   }
 
   function setSettings(
@@ -324,6 +325,7 @@ export default function binaryMatrix(
       binlog: [],
       turn: 0,
       queuedOps: {},
+      status: 'ongoing',
     };
 
     return $db.u1({ _id: gameId }, { $set: gameState } as unknown as any)[0].n === 1;
@@ -368,6 +370,7 @@ export default function binaryMatrix(
 
     g.players.push(playerObj);
 
+    userdata.current = g._id;
     $db.us({ _id: g._id }, { $set: g as any });
 
     return { ok: true, msg: 'successfully joined' };
@@ -689,6 +692,58 @@ export default function binaryMatrix(
     res += renderLanes(state);
 
     return res;
+  };
+
+  const renderLobby = (game: Partial<Game>): { ok: boolean; msg: string } => {
+    if (!game.players || !game.settings)
+      return { ok: false, msg: 'could not render lobby, do not have settings and/or players' };
+
+    // filter spec right of users who are also there as a player, does not need to be displayed
+    const players = game.players.filter((el, ix, arr) =>
+      el.team === 's'
+        ? arr.filter((el2) => el2.username === el.username && el2.team !== 's').length < 1
+        : true
+    );
+    const settings = game.settings;
+
+    let r = '\n';
+
+    const header = `binmat game \`M${game._id}\``;
+    const w = Math.min(context.cols, 80);
+
+    const s = [
+      '`Usettings`',
+      '',
+      '{',
+      ...(Object.keys(settings) as (keyof typeof settings)[]).map(
+        (el) => `  \`N${el}\`: \`V${settings[el]}\``
+      ),
+      '}',
+    ];
+
+    const p = [
+      '`Uplayers`',
+      '',
+      ...players.map((el) =>
+        'id' in el
+          ? `\`${el.team === 'a' ? 'D' : 'P'}${el.id}\`  @${el.username}`
+          : `\`cs\`   @${el.username}`
+      ),
+    ];
+
+    const ml = {
+      s: s.reduce((a, b) => (a > b.length ? a : b.length), 0),
+      p: p.reduce((a, b) => (a > b.length ? a : b.length), 0),
+    };
+
+    r += header + '\n';
+    r += ljust('-', w, '-') + '\n';
+    r += appendRight(
+      s.map((el) => ljust(el, ml.s) + '|').join('\n'),
+      p.map((el) => ljust(el, ml.p)).join('\n')
+    );
+
+    return { ok: true, msg: r };
   };
 
   //#endregion render functions
@@ -1180,80 +1235,117 @@ export default function binaryMatrix(
   const inp = args.input || args.op;
 
   let res;
+  try {
+    main: if (typeof inp !== 'string') res = "whoops, that's not right";
+    else if (inp === 'create') {
+      if (userdata.current && game) {
+        return {
+          ok: false,
+          msg: `you are already in game ${userdata.current}, leave the game to create a new one`,
+        };
+      }
 
-  main: if (typeof inp !== 'string') res = "whoops, that's not right";
-  else if (inp === 'create') {
-    res = createLobby();
-    userdata.current = res.msg;
-    res.msg = `Created loby with id ${res.msg}`;
+      res = createLobby();
+      if (res.ok) {
+        userdata.current = res._id;
+        //@ts-ignore
+        delete res._id;
+      }
 
-    break main;
-  } else if (inp === 'set' || inp === 'settings') {
-    if (game === null) {
-      res = { ok: false, msg: 'You are not currently in a lobby.' };
       break main;
-    }
-    if (game.status !== 'lobby') {
-      res = { ok: false, msg: 'game has already begun, cannot change settings.' };
-      break main;
-    }
-    if (game.admin !== context.caller) {
-      res = { ok: false, msg: 'Only lobby creator can change settings' };
-      break main;
-    }
-    const _set = args.set || args.settings;
-    if (typeof _set !== 'object') {
-      res = { ok: false, msg: 'no `Nset`tings object provided' };
-    }
+    } else if (inp === 'set' || inp === 'settings') {
+      if (game === null) {
+        res = { ok: false, msg: 'You are not currently in a lobby.' };
+        break main;
+      }
+      if (game.status !== 'lobby') {
+        res = { ok: false, msg: 'game has already begun, cannot change settings.' };
+        break main;
+      }
+      if (game.admin !== context.caller) {
+        res = { ok: false, msg: 'Only lobby creator can change settings' };
+        break main;
+      }
+      const _set = args.set || args.settings;
+      if (typeof _set !== 'object') {
+        res = { ok: false, msg: 'no `Nset`tings object provided' };
+      }
 
-    res = setSettings(game, _set as any);
-    $db.u1({ _id: game._id }, { $set: game as any });
-  } else if (inp === 'init') {
-    if (!game) {
-      res = { ok: false, msg: 'You are not currently in a lobby.' };
-      break main;
-    }
-    if (!game.settings || game.settings.seed === undefined) {
-      res = { ok: false, msg: 'err: game does not have seed set' };
-      break main;
-    }
-    if (!game.players) {
-      res = { ok: false, msg: 'err: no players found' };
-      break main;
-    }
+      res = setSettings(game, _set as any);
+      $db.u1({ _id: game._id }, { $set: game as any });
+    } else if (inp === 'init') {
+      if (!game) {
+        res = { ok: false, msg: 'You are not currently in a lobby.' };
+        break main;
+      }
+      if (game.status !== 'lobby') {
+        res = { ok: false, msg: 'The game you are in has already started' };
+        break main;
+      }
 
-    const a0 = game.players.find((el) => 'id' in el && el.id === 'a0');
-    const d0 = game.players.find((el) => 'id' in el && el.id === 'd0');
+      if (!game.settings || game.settings.seed === undefined) {
+        res = { ok: false, msg: 'err: game does not have seed set' };
+        break main;
+      }
+      if (!game.players) {
+        res = { ok: false, msg: 'err: no players found' };
+        break main;
+      }
 
-    if (!a0 || !d0) {
-      res = { ok: false, msg: 'err: a0 or d0 was not found' };
-      break main;
-    }
+      const a0 = game.players.find((el) => 'id' in el && el.id === 'a0');
+      const d0 = game.players.find((el) => 'id' in el && el.id === 'd0');
 
-    res = createGame(game._id, game.settings?.seed, a0.username, d0.username);
-  } else if (inp.startsWith('join')) {
-    const gid = args.gid || inp.split(' ')[1] || game?._id;
-    if (typeof gid !== 'string') {
-      res = { ok: false, msg: 'invalid gid' };
-      break main;
-    }
+      if (!a0 || !d0) {
+        res = { ok: false, msg: 'err: a0 or d0 was not found' };
+        break main;
+      }
 
-    const as = args.as || inp.split(' ')[2] || 's';
-    if (typeof as !== 'string' || !['a', 'd', 's'].includes(as)) {
-      res = { ok: false, msg: 'invalid position' };
-      break main;
-    }
+      res = createGame(game._id, game.settings?.seed, a0.username, d0.username);
+    } else if (inp.startsWith('join')) {
+      const gid = args.gid || inp.split(' ')[1] || game?._id;
+      if (typeof gid !== 'string') {
+        res = { ok: false, msg: 'invalid gid' };
+        break main;
+      }
 
-    res = joinGameAs(gid, as as 'a' | 'd' | 's');
-  } else if (inp === 'view') {
-    if (!game || !game.state) return 'no';
-    try {
-      return renderBoard(game.state, 'a0');
-    } catch (e) {
-      return e.message + '\n' + e.stack;
+      if (userdata.current != gid) {
+        if (game && game.status !== 'completed' && game._id !== gid) {
+          res = {
+            ok: false,
+            msg: `you are already in game ${game._id} leave it to join a new one`,
+          };
+          break main;
+        }
+      }
+
+      const as = args.as || inp.split(' ')[2] || 's';
+      if (typeof as !== 'string' || !['a', 'd', 's'].includes(as)) {
+        res = { ok: false, msg: 'invalid position' };
+        break main;
+      }
+
+      res = joinGameAs(gid, as as 'a' | 'd' | 's');
+    } else if (inp === 'view') {
+      if (!game) {
+        res = { ok: false, msg: 'no game' };
+        break main;
+      }
+
+      if (game.status === 'lobby') {
+        res = renderLobby(game);
+        break main;
+      }
+
+      if (!game.state) {
+        res = { ok: false, msg: 'no game state' };
+        break main;
+      }
+
+      res = renderBoard(game.state, 'a0');
     }
+  } catch (e) {
+    return e.message + '\n' + e.stack;
   }
-
   // yeeah
   if (
     game &&
