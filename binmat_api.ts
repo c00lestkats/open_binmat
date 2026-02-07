@@ -27,9 +27,8 @@ export default function binaryMatrix(
   type max16Array<T> = Array<T> & { length: AllowedLength };
   interface brainArgs {
     plr: // pid of current player,
-    pid | 's' | 't';
-    s: //modified state, too lazy to ts define it since its rather complicated
-    /**
+      pid | 's' | 't';
+    s /** //modified state, too lazy to ts define it since its rather complicated
      * {
      *  turns: number, // elapsed turns
      *  l[0-5]: { // decks
@@ -41,13 +40,10 @@ export default function binaryMatrix(
      * [a|d][0-5]: (cid | `${cid}u` | "X")[], // attacker/defender stack, u is appended when card is visible for everyone
      * x[0-5a]: cid[], // discards
      * a: number, // attacker deck size
-     */
-    any;
-    plrs: // array of players in the format [pid, username]
-    [pid, string][];
+     */: any;
+    plrs: [pid, string][]; // array of players in the format [pid, username]
     ord: any[];
-    ops: // binlog since last turn (of this player, so 2 turns)
-    string[];
+    ops: string[]; // binlog since last turn (of this player, so 2 turns)
   }
   const cardValues = [2, 3, 4, 5, 6, 7, 8, 9, 'a', '?', '>', '@', '*'] as const;
   const cardSigns = ['^', '+', '%', '&', '!', '#'] as const;
@@ -96,7 +92,7 @@ export default function binaryMatrix(
     type: 'binmat-game';
     state: State;
     players: User[];
-    binlog: string[];
+    binlog: BinLogEntry[];
     turn: number;
     seed: [number, number, number, number];
     queuedOps: { [Key in Player['id']]?: operation | null };
@@ -165,11 +161,29 @@ export default function binaryMatrix(
   type LogEntry = { logLevel: LogLevel & number; entry: string };
   type LogLevel = 0 | 1 | 2 | 3 | false | 4 | true | 5 | 6 | 7;
 
+  interface BinLogEntry {
+    trigger: string;
+    action: string;
+    result?: string;
+    turn: number;
+    subturn: number;
+  }
+
   function getLogger(logLevel: LogLevel, debug: boolean = false) {
+    if ($G.logger) return $G.logger;
     if (typeof logLevel === 'boolean') {
       logLevel = logLevel ? 5 : 3;
     }
-    const levels = ['`DCRI`', '`DERR`', '`JWRN`', '`HUNX`', '`QINF`', '`OINF`', '`hVER`', '`gTRC`'];
+    const levels = [
+      '`DCRI`',
+      '`DERR`',
+      '`JWRN`',
+      '`HUNX`',
+      '`QINF`',
+      '`OINF`',
+      '`hVER`',
+      '`gTRC`',
+    ];
     const _log: LogEntry[] = [];
     const logger = {
       log: (str: string, level: LogLevel & number) => {
@@ -187,6 +201,7 @@ export default function binaryMatrix(
       getLogOnLevel: (level: LogLevel & number) =>
         _log.filter((el) => el.logLevel <= level).map((el) => el.entry),
     };
+    $G.logger = logger;
     return logger;
   }
 
@@ -198,6 +213,234 @@ export default function binaryMatrix(
       : 7,
     args && args.d !== undefined ? true : false
   );
+
+  //#region binlogger
+  function getBinlogger() {
+    //if ($G.binlogger) return $G.binlogger;
+
+    const _log: BinLogEntry[] = [];
+    const binlogger = {
+      currentTurn: 0,
+      currentSubturn: 0,
+      inCombat: false,
+
+      startTurn: (turn: number) => {
+        binlogger.currentTurn = turn;
+        binlogger.currentSubturn = 1;
+        const entry: BinLogEntry = {
+          trigger: `\`V${ljust(turn.toString(), 3, '0')}\``,
+          action: '`n------`',
+          turn: turn,
+          subturn: 0,
+        };
+
+        _log.push(entry);
+      },
+
+      invalidOp: (pid: pid) => {
+        const entry: BinLogEntry = {
+          trigger: pid,
+          action: '`n--`',
+          turn: binlogger.currentTurn,
+          subturn: binlogger.currentSubturn++,
+        };
+
+        _log.push(entry);
+      },
+
+      drawOrPlay: (
+        pid: pid,
+        actionType: 'd' | 'p' | 'u',
+        actionLocation: laneNum | attackerDeckLane,
+        affectedCard: Card
+      ) => {
+        if (binlogger.inCombat && actionType === 'd') {
+          logger.log('drew card in combat, assuming damage step, not binlogging.', 4);
+          return;
+        }
+
+        const isCardUp = affectedCard.up;
+        const cardRender = isCardUp ? renderCard(affectedCard, true) : 'X';
+        const p = splitPid(pid);
+        const destination = actionType === 'd' ? `h${pid}` : `${p.team}${actionLocation}`;
+
+        const entry: BinLogEntry = {
+          trigger: pid,
+          action: `${actionType}${cardRender}${actionLocation < 6 ? actionLocation : 'a'}`,
+          result: `${cardRender} ${destination}`,
+          turn: binlogger.currentTurn,
+          subturn: binlogger.currentSubturn++,
+        };
+
+        _log.push(entry);
+      },
+
+      discard: (pid: pid, actionLocation: laneNum | attackerDeckLane, discardCard: Card) => {
+        const cardRender = renderCard(discardCard, true);
+        const rLocation = actionLocation === 6 ? 'a' : actionLocation;
+        const destination = `x${rLocation}`;
+        const res = `${cardRender} ${destination}`;
+
+        const entry: BinLogEntry = {
+          trigger: pid,
+          action: `x${cardRender}${rLocation}`,
+          result: `${res}${actionLocation === 6 ? ' / X X h' + pid : ''}`,
+          turn: binlogger.currentTurn,
+          subturn: binlogger.currentSubturn++,
+        };
+
+        _log.push(entry);
+      },
+
+      declareCombat: (pid: pid, actionLocation: laneNum) => {
+        const entry: BinLogEntry = {
+          trigger: pid,
+          action: `c${actionLocation}`,
+          turn: binlogger.currentTurn,
+          subturn: binlogger.currentSubturn++,
+        };
+
+        _log.push(entry);
+      },
+
+      combatStart: (
+        pid: pid,
+        actionLocation: laneNum,
+        attackerStack: Card[],
+        defenderStack: Card[]
+      ) => {
+        binlogger.inCombat = true;
+
+        const entry: BinLogEntry = {
+          trigger: '`n--`',
+          action: `c${actionLocation}`,
+          result: `${renderAllCards(attackerStack, true)} / ${renderAllCards(defenderStack, true)}`,
+          turn: binlogger.currentTurn,
+          subturn: binlogger.currentSubturn++,
+        };
+
+        _log.push(entry);
+
+        const res: any = {
+          atk: 0,
+          def: 0,
+          dmg: 0,
+          bnc: [],
+          trp: [],
+          lane: actionLocation,
+          ats: attackerStack,
+          discarded: [],
+          drawn: [],
+        };
+        return {
+          power: (atkPow: number, defPow: number) => {
+            res.atk = atkPow;
+            res.def = defPow;
+          },
+
+          damage: (damage: number) => {
+            res.dmg = damage;
+          },
+
+          discardedFromStack: (affectedCard: Card) => {
+            res.discard.push(affectedCard);
+          },
+
+          drawnFromStack: (affectedCard: Card) => {
+            res.drawn.push(affectedCard);
+          },
+
+          trap: (card: Card) => {
+            res.trp.push(card);
+          },
+
+          trapsdone: (team: 'a' | 'd') => {
+            const entry = {
+              trigger: '`n--`',
+              action: `${team}@`,
+              result: `${renderAllCards(res.trp)} x${team === 'd' ? res.lane : 'a'}`,
+              turn: binlogger.currentTurn,
+              subturn: binlogger.currentSubturn++,
+            };
+
+            _log.push(entry);
+          },
+
+          bounce: (card: Card) => {
+            res.bounce.push(card);
+          },
+
+          bouncedone: (team: 'a' | 'd') => {
+            const entry = {
+              trigger: '`n--`',
+              action: `${team}?`,
+              result: `${renderAllCards(res.bnc)} x${team === 'd' ? res.lane : 'a'}`,
+              turn: binlogger.currentTurn,
+              subturn: binlogger.currentSubturn++,
+            };
+
+            _log.push(entry);
+          },
+
+          finishEntry: (asToAx = true, specialCaseRoundDraw: number = 0) => {
+            const discardRes =
+              res.discarded.length > 0 ? ` / ${renderAllCards(res.discarded, true)} xa` : '';
+            let drawnRes =
+              res.drawn.length > 0 ? ` / ${renderAllCards(res.drawn)} h${pid}` : '';
+
+            if (specialCaseRoundDraw !== 0) {
+              drawnRes = '';
+              for (let i = 0; i < specialCaseRoundDraw; i++) {
+                const cards = [];
+                for (let j = 0; j < res.drawn.length % specialCaseRoundDraw; j++) {
+                  cards.push(res.drawn[i + j * specialCaseRoundDraw]);
+                }
+                drawnRes += ` / ${renderAllCards(cards)} ha${i}`;
+              }
+            }
+
+            const entry = {
+              trigger: '`n--`',
+              action: `${res.atk} ${res.def} ${res.dmg || '-'}`,
+              result: `${renderAllCards(attackerStack, true)} x${asToAx ? 'a' : res.lane}${discardRes}${drawnRes}`,
+              turn: binlogger.currentTurn,
+              subturn: binlogger.currentSubturn++,
+            };
+
+            binlogger.inCombat = false;
+
+            _log.push(entry);
+          },
+        };
+      },
+
+      renderLog: (height: number, width: number, offset: number = 0) => {
+        let res = [];
+        for (let i = _log.length; i > 0; i--) {
+          const entry = _log[i];
+          res.push(entry.trigger + ' ' + entry.action + ' / ' + entry.result);
+          if (res.length === height) break;
+        }
+        res = cleanLineSplit(res, width);
+
+        return res.slice(0, height).join('\n');
+      },
+
+      restoreLog: (log: BinLogEntry[]) => {
+        _log.push(...log);
+      },
+
+      saveLog: () => {
+        return _log;
+      },
+    };
+
+    $G.binlogger = binlogger;
+
+    return binlogger;
+  }
+
+  const binlogger = getBinlogger();
 
   // TODO REMOVE
 
@@ -224,7 +467,7 @@ export default function binaryMatrix(
     h2 = Math.imul(h4 ^ (h2 >>> 22), 2869860233);
     h3 = Math.imul(h1 ^ (h3 >>> 17), 951274213);
     h4 = Math.imul(h2 ^ (h4 >>> 19), 2716044179);
-    (h1 ^= h2 ^ h3 ^ h4), (h2 ^= h1), (h3 ^= h1), (h4 ^= h1);
+    ((h1 ^= h2 ^ h3 ^ h4), (h2 ^= h1), (h3 ^= h1), (h4 ^= h1));
     return [h1 >>> 0, h2 >>> 0, h3 >>> 0, h4 >>> 0];
   }
   function sfc32(state: [number, number, number, number]): () => number {
@@ -376,7 +619,10 @@ export default function binaryMatrix(
       lanes: lanes as [Lane, Lane, Lane, Lane, Lane, Lane],
       attackerDeck: [],
       attackerDiscard: [],
-      hands: { attacker: Array(attackerCount).fill([]), defender: Array(defenderCount).fill([]) },
+      hands: {
+        attacker: Array(attackerCount).fill([]) as max16Array<HandCard[]>,
+        defender: Array(defenderCount).fill([]) as max16Array<HandCard[]>,
+      },
     };
 
     game.state = boardState;
@@ -393,7 +639,9 @@ export default function binaryMatrix(
 
   const joinGameAs = (gameId: string, as: 'a' | 'd' | 's'): boolean => {
     const g =
-      gameId === game?._id ? game : ($db.f({ _id: gameId }).first() as unknown as Partial<Game>);
+      gameId === game?._id
+        ? game
+        : ($db.f({ _id: gameId }).first() as unknown as Partial<Game>);
     if (!g || g.type !== 'binmat-game') {
       logger.log('game not found', 1);
       return false;
@@ -559,7 +807,7 @@ export default function binaryMatrix(
     return;
   };
 
-  const powersOfTwo = [2, 4, 8, 16, 32, 64, 128, 256, 512, 1024, 2048, 4096, 8192, 16384];
+  const powersOfTwo = [1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024, 2048, 4096, 8192, 16384];
 
   const calcStackPow = (stack: Stack<Card>): number => {
     // calculate number sum
@@ -609,7 +857,8 @@ export default function binaryMatrix(
     result.plr = pid;
 
     let prevTurn = `${game.turn - 2} ---`;
-    result.ops = game.binlog.slice(game.binlog.indexOf(prevTurn));
+    const binlog = binlogger.renderLog(100, 10000).split('\n');
+    result.ops = binlog.slice(binlog.indexOf(prevTurn));
 
     result.plrs = (game.players.filter((el) => el.team === 'a' || el.team === 'd') as Player[]) // don't include spectators
       .map((el) => [el.id, el.username]);
@@ -700,6 +949,120 @@ export default function binaryMatrix(
     return str;
   };
 
+  const side_by_side = (str1: string, str2: string): string => {
+    let s1 = str1.split('\n');
+    let s2 = str2.split('\n');
+    let res = [];
+    for (let i = 0; i < Math.max(s1.length, s2.length); i++) {
+      res.push((s1[i] || '') + (s2[i] || ''));
+    }
+    return res.join('\n');
+  };
+
+  const cleanLineSplit = (lines: string[], width: number): string[] => {
+    let lines_output = [];
+    const goodSplitChars = /[ /]/g;
+    const validColorCodes = /^[a-zA-Z0-9]$/;
+    for (let k = 0; k < lines.length; k++) {
+      // for these splits
+      if (len_wo_colors(lines[k]) > width) {
+        // if the line is longer than it should be
+        let line_in_output = '';
+        let in_color_code = false;
+        let after_color_code = false;
+        let remaining_input = lines[k];
+        let ll = 0;
+
+        for (let l = 0; l < lines[k].length && remaining_input.length > 0; l++) {
+          let char = lines[k][l];
+          let next_sign = remaining_input.substring(1).search(goodSplitChars);
+          let netx_opportunity = next_sign === -1 ? remaining_input.length : next_sign + 2;
+          if (
+            // if this is a color code char and there is more coming, or we already are in a color code
+            char === '`' &&
+            (count(remaining_input, '`') > 1 || in_color_code)
+          ) {
+            in_color_code = !in_color_code;
+            // true if we entered a color code, false if we exited
+            after_color_code = in_color_code;
+            line_in_output += char;
+            remaining_input = remaining_input.substring(1);
+          } else if (after_color_code) {
+            // if we _just_ entered a color code, ergo if the last char was one
+            // if this char is not a color quanitfier, we aren't in a color code at all
+            if (!validColorCodes.test(char)) {
+              in_color_code = false;
+              // this char and the invalid color code char
+              ll += 2;
+            }
+            after_color_code = false;
+            line_in_output += char;
+            remaining_input = remaining_input.substring(1);
+          } else if (
+            // if we have a split oppertunity, and the next one is too far away
+            goodSplitChars.test(char) &&
+            ll + netx_opportunity > width
+          ) {
+            // add this char
+            line_in_output += char;
+            // end color code if nessecary
+            if (in_color_code) line_in_output += '`';
+            // if color coode would end with next char, skip one more char for next line
+            if (in_color_code && remaining_input[1] === '`') {
+              // color code ended with this line
+              in_color_code = false;
+              remaining_input = remaining_input.substring(1);
+            }
+            // remove added char
+            remaining_input = remaining_input.substring(1);
+            lines_output.push(line_in_output);
+            ll = 0;
+
+            // if we were still in a color code, take the same code for the next line
+            if (in_color_code) {
+              line_in_output =
+                '`' +
+                line_in_output[
+                  line_in_output.substring(0, line_in_output.length - 1).lastIndexOf('`') + 1
+                ];
+            } else line_in_output = '';
+          } else if (len_wo_colors(remaining_input) + ll <= width) {
+            // the remaining input is shorter than what we cap to, so just add it
+            line_in_output += remaining_input;
+            lines_output.push(line_in_output);
+            remaining_input = '';
+            line_in_output = '';
+            ll = 0;
+          } else if (ll >= width - 1) {
+            // if we have reached max width
+            line_in_output += char;
+            if (in_color_code) line_in_output += '`';
+            remaining_input = remaining_input.substring(1);
+            // split to next line
+            lines_output.push(line_in_output);
+            line_in_output = in_color_code
+              ? // if we were still in a color code we take it with us to the next line
+                '`' +
+                line_in_output[
+                  line_in_output.substring(0, line_in_output.length - 1).lastIndexOf('`') + 1
+                ]
+              : '';
+            ll = 0;
+          } else {
+            // nothing special, just add the char
+            ll++;
+            line_in_output += char;
+            remaining_input = remaining_input.substring(1);
+          }
+        }
+      } else {
+        // if the line first into the table
+        lines_output.push(lines[k]);
+      }
+    }
+    return lines_output;
+  };
+
   function count(str: string, search: string): number {
     return str.split(search).length - 1;
   }
@@ -787,15 +1150,19 @@ export default function binaryMatrix(
     res += '\n\n';
     res += renderHands(state, _for, _for[0] === 'a' || _for[0] !== 'd');
 
+    res = cleanLineSplit(res.split('\n'), Math.ceil(context.columns / 2)).join('\n');
+
+    let binlog = binlogger.renderLog(res.split('\n').length, Math.floor(context.columns / 2));
+
+    res = side_by_side(res, binlog);
+
     return res;
   };
 
   const renderLobby = (game: Partial<Game>): false | string => {
     if (!game.players || !game.settings) {
       logger.log(
-        `Game had no ${
-          game.players ? 'settings' : game.settings ? 'player' : 'settings or players'
-        }`,
+        `Game had no ${game.players ? 'settings' : game.settings ? 'player' : 'settings or players'}`,
         1
       );
       return false;
@@ -902,6 +1269,7 @@ export default function binaryMatrix(
       deck[deck.length - 1].up = true;
     }
 
+    binlogger.drawOrPlay(pid, 'd', lane, card);
     // set card visibility to team
     card.up = false;
     hand.push(card as HandCard);
@@ -934,7 +1302,9 @@ export default function binaryMatrix(
     if (!Array.isArray(hand)) throw new Error('player hand was not an array');
 
     // remove from hand
-    let discardCard = spliceCardFromHand(pid, state, card.value, card.sign) as Card | undefined;
+    let discardCard = spliceCardFromHand(pid, state, card.value, card.sign) as
+      | Card
+      | undefined;
 
     if (discardCard === undefined) {
       logger.log('did not get card', 3);
@@ -944,6 +1314,8 @@ export default function binaryMatrix(
     // make visible and add to discard
     discardCard.up = true;
     discard.push(discardCard as DiscardedCard);
+
+    binlogger.discard(pid, lane, discardCard);
 
     // if attacker discards to attacker discard, they draw two cards from attacker deck
     if (lane === 6) {
@@ -963,9 +1335,7 @@ export default function binaryMatrix(
     up: boolean = false
   ): boolean => {
     logger.log(
-      `entered playing funciton with pid ${pid}, lane ${lane}, card ${cardToCid(
-        card as Card
-      )}, up ${up}`,
+      `entered playing funciton with pid ${pid}, lane ${lane}, card ${cardToCid(card as Card)}, up ${up}`,
       7
     );
     // get player playing card
@@ -1011,6 +1381,8 @@ export default function binaryMatrix(
     _card.up = up;
     stack.cards.push(_card as PlayedCard);
 
+    binlogger.drawOrPlay(pid, up ? 'u' : 'p', lane, _card);
+
     // if face-up ? or > initiate combat
     if (up && (_card.value === '>' || _card.value === '?')) {
       logger.log('combat was initiated by played card', 4);
@@ -1020,23 +1392,33 @@ export default function binaryMatrix(
     return true;
   };
 
-  const bounceCombat = (as: CombatStack, ds: CombatStack, ax: Stack<DiscardedCard>): boolean => {
+  const bounceCombat = (
+    as: CombatStack,
+    ds: CombatStack,
+    ax: Stack<DiscardedCard>
+  ): boolean => {
     const asCards = as.cards.splice(0, as.cards.length);
     asCards.forEach((el) => (el.up = true));
     ax.push(...(asCards as DiscardedCard[]));
 
     ds.cards.forEach((el) => (el.up = true));
     ds.force_visible = true;
-
     return true;
   };
 
-  const combat = (pid: pid, lane: laneNum, game: Game, fromBreak: boolean = false): boolean => {
+  const combat = (
+    pid: pid,
+    lane: laneNum,
+    game: Game,
+    fromBreak: boolean = false
+  ): boolean => {
     logger.log(`entering combat with pid ${pid}, lane ${lane}`, 6);
     // get teams
     const p = splitPid(pid);
     const o: { team: 'a' | 'd'; teamlong: 'attacker' | 'defender' } =
-      p.team === 'a' ? { team: 'd', teamlong: 'defender' } : { team: 'a', teamlong: 'attacker' };
+      p.team === 'a'
+        ? { team: 'd', teamlong: 'defender' }
+        : { team: 'a', teamlong: 'attacker' };
 
     // get relevant stacks
     const state = game.state;
@@ -1045,16 +1427,20 @@ export default function binaryMatrix(
     const stacks = { attacker: attackerStack, defender: defenderStack };
     const discards = { attacker: _attackerDiscard, defender: discard };
 
+    const combatBinlogger = binlogger.combatStart(
+      pid,
+      lane,
+      stacks.attacker.cards,
+      stacks.defender.cards
+    );
+
     if (p.teamlong == 'defender' && !fromBreak) {
       logger.log('defender inited combat not from break, not allowed', 4);
       return false;
     }
 
     logger.log(
-      `stacks: ${renderAllCards(stacks.attacker.cards, true)} / ${renderAllCards(
-        stacks.defender.cards,
-        true
-      )}`,
+      `stacks: ${renderAllCards(stacks.attacker.cards, true)} / ${renderAllCards(stacks.defender.cards, true)}`,
       5
     );
 
@@ -1067,8 +1453,10 @@ export default function binaryMatrix(
       if (c === undefined) break;
       logger.log(`sending ${cardToCid(c)} to discard of ${o.teamlong}`, 6);
       c.up = true;
+      combatBinlogger.trap(c);
       discards[p.teamlong].push(c as DiscardedCard);
     }
+    if (attackingTraps.length) combatBinlogger.trapsdone(p.team);
 
     const defendingTraps = stacks[o.teamlong].cards.filter((el) => el.value === '@');
     for (let i = 0; i < defendingTraps.length; i++) {
@@ -1077,8 +1465,10 @@ export default function binaryMatrix(
       if (c === undefined) break;
       logger.log(`sending ${cardToCid(c)} to discard of ${o.teamlong}`, 6);
       c.up = true;
+      combatBinlogger.trap(c);
       discards[o.teamlong].push(c as DiscardedCard);
     }
+    if (defendingTraps.length) combatBinlogger.trapsdone(o.team);
 
     // calculate pow
     const pow = {
@@ -1108,6 +1498,7 @@ export default function binaryMatrix(
         c.up = true;
         discards.attacker.push(c as DiscardedCard);
       }
+      combatBinlogger.finishEntry();
       // bounce combat
       return bounceCombat(stacks.attacker, stacks.defender, discards.attacker);
     }
@@ -1115,27 +1506,15 @@ export default function binaryMatrix(
     // if both stacks are pow 0, bounce
     if (pow.attacker === 0 && pow.defender === 0) {
       logger.log('both stacks had pow 0, bouncing', 6);
+      combatBinlogger.finishEntry();
       return bounceCombat(stacks.attacker, stacks.defender, discards.attacker);
     }
+
+    combatBinlogger.power(pow.attacker, pow.defender);
 
     // resolve combat winner
     const powDiff = pow.attacker - pow.defender;
     const winner = powDiff < 0 ? 'defender' : 'attacker';
-
-    // if defender win
-    if (winner === 'defender') {
-      // discard as to xd
-      let cards = stacks.attacker.cards.splice(0, stacks.attacker.cards.length);
-      cards.forEach((el) => (el.up = true));
-      discards.defender.push(...(cards as DiscardedCard[]));
-
-      // turn ds up
-      stacks.defender.cards.forEach((el) => (el.up = true));
-      stacks.defender.force_visible = true;
-
-      return true;
-    }
-    // if attacker win
 
     const breaks = [
       ...stacks.attacker.cards.filter((el) => el.value === '>'),
@@ -1150,10 +1529,21 @@ export default function binaryMatrix(
         : // else damage = pow as - pow ds + 1
           powDiff + 1;
 
-    // discard as
+    combatBinlogger.damage(damage);
+
+    // discard as to winners discard
     let cards = stacks.attacker.cards.splice(0, stacks.attacker.cards.length);
     cards.forEach((el) => (el.up = true));
-    discards.attacker.push(...(cards as DiscardedCard[]));
+    discards[winner].push(...(cards as DiscardedCard[]));
+
+    // turn ds up
+    stacks.defender.cards.forEach((el) => (el.up = true));
+    stacks.defender.force_visible = true;
+
+    if (winner === 'defender') {
+      combatBinlogger.finishEntry(false);
+      return true;
+    }
 
     //resolve damage
     for (let i = 0; i < damage; i++) {
@@ -1165,7 +1555,7 @@ export default function binaryMatrix(
             (('a' + (i % game.state.hands.attacker.length)) as pid);
       const ds = stacks.defender.cards;
       const ax = discards.attacker;
-      // if still cards in ds, discard them to ax
+      // if still cards in ds & attacker won, discard them to ax
       if (ds.length > 0) {
         let c = ds.pop();
         if (!c)
@@ -1173,12 +1563,16 @@ export default function binaryMatrix(
             "ts wants this but I already check for the condition so if this error shows up the array had no items despite it's length being > 0"
           );
         c.up = true;
+        combatBinlogger.discardedFromStack(c);
         ax.push(c as DiscardedCard);
       } else {
         // else draw card
+        combatBinlogger.drawnFromStack(deck[0]);
         drawCard(usePid, lane, game);
       }
     }
+
+    combatBinlogger.finishEntry(true, p.team === 'd' ? state.hands.attacker.length : 0);
 
     return true;
   };
@@ -1196,7 +1590,9 @@ export default function binaryMatrix(
       .filter((el) => el[0] === 'a' || el[0] === 'd');
     switch (game.settings.ord) {
       case 'playerIndex':
-        return pids.sort((a, b) => (a[1] > b[1] ? 1 : -1)).sort((a, b) => (a[0] > b[0] ? -1 : 1));
+        return pids
+          .sort((a, b) => (a[1] > b[1] ? 1 : -1))
+          .sort((a, b) => (a[0] > b[0] ? -1 : 1));
       case 'ramdom':
         const r = sfc32(game.seed);
         return shuffleArray(pids, r).sort((a, b) => (a[0] > b[0] ? -1 : 1));
@@ -1301,7 +1697,13 @@ export default function binaryMatrix(
             `could not get details from operation ${op}, this is likely a validation error`
           );
 
-        return playCard(as, parse.lane, { value: parse.cardVal, sign: parse.cardSign }, game, up);
+        return playCard(
+          as,
+          parse.lane,
+          { value: parse.cardVal, sign: parse.cardSign },
+          game,
+          up
+        );
 
       default:
         return false;
@@ -1372,13 +1774,15 @@ export default function binaryMatrix(
     };
     const team = game.turn % 2 === 0 ? 'd' : 'a';
 
-    game.binlog.push(`${game.turn} ---`);
+    binlogger.startTurn(game.turn);
 
     for (let playerId of ord[team]) {
       const op = game.queuedOps[playerId];
       const player = players.find((el) => el.id === playerId);
       if (!player)
-        throw new Error(`Could not find player with pid ${playerId}, who was specified in ord`);
+        throw new Error(
+          `Could not find player with pid ${playerId}, who was specified in ord`
+        );
 
       let validop = op !== undefined && op !== null && runOp(playerId, op, game);
 
@@ -1443,6 +1847,51 @@ export default function binaryMatrix(
     return true;
   };
 
+  const manual = `
+open.binmat \`Aman\`ual page
+
+This is a binmat implementation.
+Binmat rules:\`S https://github.\`Scom/comcode-org/binmat_rules?tab=readme-ov-file#combat\`
+Binmat basics:\`S https://binm.\`Sat/tutorial_index\`
+
+  \`Acreate\`
+    create a game lobby. 
+    Returns a lobby visualisation with the gameID, settings and current players.
+
+  \`Ajoin\` 
+    <gameID> 
+      The ID of the game you want to join. 
+      Default current game
+      
+    <position?> (a | d | s)
+      The position you want to join as. 
+        a - attacker
+        d - defender
+        s - spectator
+      Default s
+    
+    Returns a lobby visualisation with the gameID, settings and current players.  
+
+  \`Ainit\`
+    initialize/start the current game. setup -> playing
+    Returns a lobby visualisation with the gameID, settings and current players.
+
+  \`Aview\`
+    Returns a visualisation of the current lobby or game.
+
+  \`Alobby\`
+    Returns a visualisation of the current lobby.
+  
+  \`Aleave\`
+    Leave the current game or lobby.
+  
+  \`A<BinmatOp>\`
+    Submit your turn for the current game.
+    Special case:\`S If you are playing multiple positions \`
+     submit your BinmatOp as \`Ninput\` and additionally submit \`Nas\` which position this Op should be executed.
+
+    `;
+
   //#region script run
 
   const userdata: Userdata = ($db
@@ -1454,16 +1903,25 @@ export default function binaryMatrix(
   };
 
   const game: Partial<Game> | null = userdata.current
-    ? ($db.f({ _id: userdata.current, type: 'binmat-game' }).first() as unknown as Partial<Game>)
+    ? ($db
+        .f({ _id: userdata.current, type: 'binmat-game' })
+        .first() as unknown as Partial<Game>)
     : null;
 
-  if (!args) return 'this is binmat';
+  if (!args) return manual;
 
   const inp = args.input || args.op;
+
+  if (game && game.status === 'ongoing' && game.binlog) {
+    binlogger.restoreLog(game.binlog);
+  }
+
+  if (!userdata.current && !inp) return manual;
 
   let res;
   try {
     main: if (typeof inp !== 'string') res = "whoops, that's not right";
+    else if (inp === 'man') return manual;
     else if (inp === 'create') {
       if (userdata.current && game) {
         return {
@@ -1627,6 +2085,16 @@ export default function binaryMatrix(
       if (lobby === false) break main;
 
       res = { ok: true, msg: lobby };
+    } else if (inp === 'leave') {
+      if (!game) {
+        logger.log('You are not in a game or lobby', 4);
+        break main;
+      }
+
+      if (game.status === 'ongoing') {
+        logger.log('leaving ongoing game', 4);
+      }
+      userdata.current = null;
     } else {
       if (!game) {
         logger.log('You are not in a game or lobby', 4);
@@ -1680,6 +2148,10 @@ export default function binaryMatrix(
     }
   } catch (e) {
     return e.message + '\n' + e.stack + '\n\n' + logger.getLogOnLevel(6);
+  }
+
+  if (game && game.status === 'ongoing') {
+    game.binlog = binlogger.saveLog();
   }
   // yeeah
   if (game && res && typeof res === 'object' && 'ok' in res && res.ok === true) {
