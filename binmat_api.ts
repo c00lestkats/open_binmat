@@ -1312,6 +1312,7 @@ export default function binaryMatrix(
     const hand = state.hands[p.teamlong][hexToDec(p.num)];
     if (!Array.isArray(hand)) throw new Error('player hand was not an array');
 
+    if (lane === 6 && deck.length === 0 && discard.length === 0) return false;
     // remove from hand
     let discardCard = spliceCardFromHand(pid, state, card.value, card.sign) as Card | undefined;
 
@@ -1544,16 +1545,11 @@ export default function binaryMatrix(
     }
 
     //resolve damage
-    for (let i = 0; i < damage; i++) {
-      let usePid =
-        pid[0] === 'a'
-          ? // if attacker attacked, give them cards
-            pid
-          : // if defender >, give cards rotating, starting a0
-            (('a' + (i % game.state.hands.attacker.length)) as pid);
+    let remaining = damage;
+    for (; remaining > 0; remaining--) {
       const ds = stacks.defender.cards;
       const ax = discards.attacker;
-      // if still cards in ds & attacker won, discard them to ax
+      // if still cards in ds, discard them to ax
       if (ds.length > 0) {
         let c = ds.pop();
         if (!c)
@@ -1564,9 +1560,18 @@ export default function binaryMatrix(
         combatBinlogger.discardedFromStack(c);
         ax.push(c as DiscardedCard);
       } else {
-        // else draw card
-        combatBinlogger.drawnFromStack(deck[0]);
-        drawCard(usePid, lane, game);
+        // otherwise draw from deck
+        for (let i = 0; remaining > 0; remaining--, i++) {
+          let usePid =
+            pid[0] === 'a'
+              ? // if attacker attacked, give them cards
+                pid
+              : // if defender >, give cards rotating, starting a0
+                (('a' + (i % game.state.hands.attacker.length)) as pid);
+          // else draw card
+          combatBinlogger.drawnFromStack(deck[0]);
+          drawCard(usePid, lane, game);
+        }
       }
     }
 
@@ -1659,6 +1664,10 @@ export default function binaryMatrix(
 
         let num: laneNum | attackerDeckLane = Number(drawlane) as laneNum;
         if (drawlane === 'a') num = 6;
+
+        if ($G.cache.drawn.includes(drawlane)) return false;
+
+        $G.cache.drawn.push(drawlane);
 
         return drawCard(as, num, game);
       case 'x':
@@ -1753,6 +1762,7 @@ export default function binaryMatrix(
 
   const runTurn = (game: Game) => {
     if (game.turn === game.settings.turnLimit) return endGame(game, 'd');
+    $G.cache = { drawn: [] };
     logger.log(`running turn ${game.turn}`, 6);
     const players: Player[] = game.players.filter(
       (el) => el.team === 'a' || el.team === 'd'
@@ -1839,7 +1849,7 @@ export default function binaryMatrix(
 open.binmat \`Aman\`ual page
 
 This is a binmat implementation.
-Binmat rules:\`S https://github.\`Scom/comcode-org/binmat_rules?tab=readme-ov-file#combat\`
+Binmat rules:\`S https://github.\`\`Scom/comcode-org/binmat_rules?tab=readme-ov-file#combat\`
 Binmat basics:\`S https://binm.\`\`Sat/tutorial_index\`
 source: \`Shttps://github.\`\`Scom/c00lestkats/open_binmat\`
 
