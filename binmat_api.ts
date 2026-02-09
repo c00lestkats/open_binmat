@@ -1840,7 +1840,8 @@ open.binmat \`Aman\`ual page
 
 This is a binmat implementation.
 Binmat rules:\`S https://github.\`Scom/comcode-org/binmat_rules?tab=readme-ov-file#combat\`
-Binmat basics:\`S https://binm.\`Sat/tutorial_index\`
+Binmat basics:\`S https://binm.\`\`Sat/tutorial_index\`
+source: \`Shttps://github.\`\`Scom/c00lestkats/open_binmat\`
 
   \`Acreate\`
     create a game lobby. 
