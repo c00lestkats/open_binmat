@@ -174,16 +174,7 @@ export default function binaryMatrix(
     if (typeof logLevel === 'boolean') {
       logLevel = logLevel ? 5 : 3;
     }
-    const levels = [
-      '`DCRI`',
-      '`DERR`',
-      '`JWRN`',
-      '`HUNX`',
-      '`QINF`',
-      '`OINF`',
-      '`hVER`',
-      '`gTRC`',
-    ];
+    const levels = ['`DCRI`', '`DERR`', '`JWRN`', '`HUNX`', '`QINF`', '`OINF`', '`hVER`', '`gTRC`'];
     const _log: LogEntry[] = [];
     const logger = {
       log: (str: string, level: LogLevel & number) => {
@@ -210,7 +201,7 @@ export default function binaryMatrix(
       args.v &&
       (typeof args.v === 'boolean' || (typeof args.v === 'number' && args.v > 0 && args.v < 8))
       ? (args.v as LogLevel)
-      : 7,
+      : 4,
     args && args.d !== undefined ? true : false
   );
 
@@ -228,7 +219,7 @@ export default function binaryMatrix(
         binlogger.currentTurn = turn;
         binlogger.currentSubturn = 1;
         const entry: BinLogEntry = {
-          trigger: `\`V${ljust(turn.toString(), 3, '0')}\``,
+          trigger: `\`V${rjust(turn.toString(), 3, '0')}\``,
           action: '`n------`',
           turn: turn,
           subturn: 0,
@@ -248,21 +239,37 @@ export default function binaryMatrix(
         _log.push(entry);
       },
 
-      drawOrPlay: (
-        pid: pid,
-        actionType: 'd' | 'p' | 'u',
-        actionLocation: laneNum | attackerDeckLane,
-        affectedCard: Card
-      ) => {
-        if (binlogger.inCombat && actionType === 'd') {
+      draw: (pid: pid, actionLocation: laneNum | attackerDeckLane, affectedCard: Card) => {
+        if (binlogger.inCombat) {
           logger.log('drew card in combat, assuming damage step, not binlogging.', 4);
           return;
         }
 
         const isCardUp = affectedCard.up;
         const cardRender = isCardUp ? renderCard(affectedCard, true) : 'X';
+        const destination = `h${pid}`;
+
+        const entry: BinLogEntry = {
+          trigger: pid,
+          action: `d${actionLocation < 6 ? actionLocation : 'a'}`,
+          result: `${cardRender} ${destination}`,
+          turn: binlogger.currentTurn,
+          subturn: binlogger.currentSubturn++,
+        };
+
+        _log.push(entry);
+      },
+
+      play: (
+        pid: pid,
+        actionType: 'p' | 'u',
+        actionLocation: laneNum | attackerDeckLane,
+        affectedCard: Card
+      ) => {
+        const isCardUp = affectedCard.up;
+        const cardRender = isCardUp ? renderCard(affectedCard, true) : 'X';
         const p = splitPid(pid);
-        const destination = actionType === 'd' ? `h${pid}` : `${p.team}${actionLocation}`;
+        const destination = `${p.team}${actionLocation}`;
 
         const entry: BinLogEntry = {
           trigger: pid,
@@ -385,8 +392,7 @@ export default function binaryMatrix(
           finishEntry: (asToAx = true, specialCaseRoundDraw: number = 0) => {
             const discardRes =
               res.discarded.length > 0 ? ` / ${renderAllCards(res.discarded, true)} xa` : '';
-            let drawnRes =
-              res.drawn.length > 0 ? ` / ${renderAllCards(res.drawn)} h${pid}` : '';
+            let drawnRes = res.drawn.length > 0 ? ` / ${renderAllCards(res.drawn)} h${pid}` : '';
 
             if (specialCaseRoundDraw !== 0) {
               drawnRes = '';
@@ -416,14 +422,19 @@ export default function binaryMatrix(
 
       renderLog: (height: number, width: number, offset: number = 0) => {
         let res = [];
-        for (let i = _log.length; i > 0; i--) {
+        for (let i = _log.length - 1; i >= 0; i--) {
           const entry = _log[i];
-          res.push(entry.trigger + ' ' + entry.action + ' / ' + entry.result);
+          res.push(
+            entry.trigger +
+              ' ' +
+              entry.action +
+              (entry.result === undefined ? '' : ' / ' + entry.result)
+          );
           if (res.length === height) break;
         }
         res = cleanLineSplit(res, width);
 
-        return res.slice(0, height).join('\n');
+        return res.slice(0, height).reverse().join('\n');
       },
 
       restoreLog: (log: BinLogEntry[]) => {
@@ -444,8 +455,8 @@ export default function binaryMatrix(
 
   // TODO REMOVE
 
-  logger.log('This script is in test mode', 4);
-  args = args || {};
+  //logger.log('This script is in test mode', 4);
+  args = args || { wasnull: true };
   args.log = true;
 
   //#endregionlogger
@@ -639,9 +650,7 @@ export default function binaryMatrix(
 
   const joinGameAs = (gameId: string, as: 'a' | 'd' | 's'): boolean => {
     const g =
-      gameId === game?._id
-        ? game
-        : ($db.f({ _id: gameId }).first() as unknown as Partial<Game>);
+      gameId === game?._id ? game : ($db.f({ _id: gameId }).first() as unknown as Partial<Game>);
     if (!g || g.type !== 'binmat-game') {
       logger.log('game not found', 1);
       return false;
@@ -1150,9 +1159,11 @@ export default function binaryMatrix(
     res += '\n\n';
     res += renderHands(state, _for, _for[0] === 'a' || _for[0] !== 'd');
 
-    res = cleanLineSplit(res.split('\n'), Math.ceil(context.columns / 2)).join('\n');
+    res = cleanLineSplit(res.split('\n'), Math.floor(context.cols / 2) - 2)
+      .map((el) => ljust(el, Math.floor(context.cols / 2)) + ' | ')
+      .join('\n');
 
-    let binlog = binlogger.renderLog(res.split('\n').length, Math.floor(context.columns / 2));
+    let binlog = binlogger.renderLog(res.split('\n').length, Math.floor(context.cols / 2) - 1);
 
     res = side_by_side(res, binlog);
 
@@ -1269,7 +1280,7 @@ export default function binaryMatrix(
       deck[deck.length - 1].up = true;
     }
 
-    binlogger.drawOrPlay(pid, 'd', lane, card);
+    binlogger.draw(pid, lane, card);
     // set card visibility to team
     card.up = false;
     hand.push(card as HandCard);
@@ -1302,9 +1313,7 @@ export default function binaryMatrix(
     if (!Array.isArray(hand)) throw new Error('player hand was not an array');
 
     // remove from hand
-    let discardCard = spliceCardFromHand(pid, state, card.value, card.sign) as
-      | Card
-      | undefined;
+    let discardCard = spliceCardFromHand(pid, state, card.value, card.sign) as Card | undefined;
 
     if (discardCard === undefined) {
       logger.log('did not get card', 3);
@@ -1381,7 +1390,7 @@ export default function binaryMatrix(
     _card.up = up;
     stack.cards.push(_card as PlayedCard);
 
-    binlogger.drawOrPlay(pid, up ? 'u' : 'p', lane, _card);
+    binlogger.play(pid, up ? 'u' : 'p', lane, _card);
 
     // if face-up ? or > initiate combat
     if (up && (_card.value === '>' || _card.value === '?')) {
@@ -1392,11 +1401,7 @@ export default function binaryMatrix(
     return true;
   };
 
-  const bounceCombat = (
-    as: CombatStack,
-    ds: CombatStack,
-    ax: Stack<DiscardedCard>
-  ): boolean => {
+  const bounceCombat = (as: CombatStack, ds: CombatStack, ax: Stack<DiscardedCard>): boolean => {
     const asCards = as.cards.splice(0, as.cards.length);
     asCards.forEach((el) => (el.up = true));
     ax.push(...(asCards as DiscardedCard[]));
@@ -1406,19 +1411,12 @@ export default function binaryMatrix(
     return true;
   };
 
-  const combat = (
-    pid: pid,
-    lane: laneNum,
-    game: Game,
-    fromBreak: boolean = false
-  ): boolean => {
+  const combat = (pid: pid, lane: laneNum, game: Game, fromBreak: boolean = false): boolean => {
     logger.log(`entering combat with pid ${pid}, lane ${lane}`, 6);
     // get teams
     const p = splitPid(pid);
     const o: { team: 'a' | 'd'; teamlong: 'attacker' | 'defender' } =
-      p.team === 'a'
-        ? { team: 'd', teamlong: 'defender' }
-        : { team: 'a', teamlong: 'attacker' };
+      p.team === 'a' ? { team: 'd', teamlong: 'defender' } : { team: 'a', teamlong: 'attacker' };
 
     // get relevant stacks
     const state = game.state;
@@ -1590,9 +1588,7 @@ export default function binaryMatrix(
       .filter((el) => el[0] === 'a' || el[0] === 'd');
     switch (game.settings.ord) {
       case 'playerIndex':
-        return pids
-          .sort((a, b) => (a[1] > b[1] ? 1 : -1))
-          .sort((a, b) => (a[0] > b[0] ? -1 : 1));
+        return pids.sort((a, b) => (a[1] > b[1] ? 1 : -1)).sort((a, b) => (a[0] > b[0] ? -1 : 1));
       case 'ramdom':
         const r = sfc32(game.seed);
         return shuffleArray(pids, r).sort((a, b) => (a[0] > b[0] ? -1 : 1));
@@ -1697,13 +1693,7 @@ export default function binaryMatrix(
             `could not get details from operation ${op}, this is likely a validation error`
           );
 
-        return playCard(
-          as,
-          parse.lane,
-          { value: parse.cardVal, sign: parse.cardSign },
-          game,
-          up
-        );
+        return playCard(as, parse.lane, { value: parse.cardVal, sign: parse.cardSign }, game, up);
 
       default:
         return false;
@@ -1780,9 +1770,7 @@ export default function binaryMatrix(
       const op = game.queuedOps[playerId];
       const player = players.find((el) => el.id === playerId);
       if (!player)
-        throw new Error(
-          `Could not find player with pid ${playerId}, who was specified in ord`
-        );
+        throw new Error(`Could not find player with pid ${playerId}, who was specified in ord`);
 
       let validop = op !== undefined && op !== null && runOp(playerId, op, game);
 
@@ -1872,6 +1860,12 @@ Binmat basics:\`S https://binm.\`Sat/tutorial_index\`
     
     Returns a lobby visualisation with the gameID, settings and current players.  
 
+  \`Aset\`, \`Asettings\`
+    requires providing a \`Nset\`tings object.
+    sets the settings of the current game to the settings provided.
+    only works while in lobby.
+    Returns a lobby visualisation with the gameID, settings and current players.
+
   \`Ainit\`
     initialize/start the current game. setup -> playing
     Returns a lobby visualisation with the gameID, settings and current players.
@@ -1903,12 +1897,10 @@ Binmat basics:\`S https://binm.\`Sat/tutorial_index\`
   };
 
   const game: Partial<Game> | null = userdata.current
-    ? ($db
-        .f({ _id: userdata.current, type: 'binmat-game' })
-        .first() as unknown as Partial<Game>)
+    ? ($db.f({ _id: userdata.current, type: 'binmat-game' }).first() as unknown as Partial<Game>)
     : null;
 
-  if (!args) return manual;
+  if (!args || args.wasnull) return manual;
 
   const inp = args.input || args.op;
 
@@ -1943,20 +1935,32 @@ Binmat basics:\`S https://binm.\`Sat/tutorial_index\`
       break main;
     } else if (inp === 'set' || inp === 'settings') {
       if (game === null) {
-        logger.log('You are not currently in a lobby, cannot set settings.', 4);
+        res = {
+          ok: false,
+          msg: 'You are not currently in a lobby, cannot set settings.',
+        };
         break main;
       }
       if (game.status !== 'lobby') {
-        logger.log('game has already begun, cannot change settings.', 4);
+        res = {
+          ok: false,
+          msg: 'game has already begun, cannot change settings.',
+        };
         break main;
       }
       if (game.admin !== context.caller) {
-        logger.log('Only lobby creator can change settings', 4);
+        res = {
+          ok: false,
+          msg: 'Only lobby creator can change settings',
+        };
         break main;
       }
       const _set = args.set || args.settings;
       if (typeof _set !== 'object') {
-        logger.log('no `Nset`tings object provided, skipping', 2);
+        res = {
+          ok: false,
+          msg: 'no `Nset`tings object provided, skipping',
+        };
         break main;
       }
 
@@ -1970,11 +1974,17 @@ Binmat basics:\`S https://binm.\`Sat/tutorial_index\`
       }
     } else if (inp === 'init') {
       if (!game) {
-        logger.log('You are not currently in a lobby, cannot init game.', 4);
+        res = {
+          ok: false,
+          msg: 'You are not currently in a lobby, cannot init game.',
+        };
         break main;
       }
       if (game.status !== 'lobby') {
-        logger.log('The game you are in has already started', 4);
+        res = {
+          ok: false,
+          msg: 'The game you are in has already started',
+        };
         break main;
       }
 
@@ -1991,7 +2001,10 @@ Binmat basics:\`S https://binm.\`Sat/tutorial_index\`
       const d0 = game.players.find((el) => 'id' in el && el.id === 'd0');
 
       if (!a0 || !d0) {
-        logger.log('err: a0 or d0 was not found', 1);
+        res = {
+          ok: false,
+          msg: 'a0 or d0 was not found. need at least 2 players for a game.',
+        };
         break main;
       }
 
@@ -2004,20 +2017,29 @@ Binmat basics:\`S https://binm.\`Sat/tutorial_index\`
     } else if (inp.startsWith('join')) {
       const gid = args.gid || inp.split(' ')[1] || game?._id;
       if (typeof gid !== 'string') {
-        logger.log('invalid gameId (`Ngid`), skipping', 2);
+        res = {
+          ok: false,
+          msg: 'invalid gameId (`Ngid`), skipping',
+        };
         break main;
       }
 
       if (userdata.current != gid) {
         if (game && game.status !== 'completed' && game._id !== gid) {
-          logger.log(`you are already in game ${game._id} leave it to join a new one`, 2);
+          res = {
+            ok: false,
+            msg: `you are already in game ${game._id} leave it to join a new one`,
+          };
           break main;
         }
       }
 
       const as = args.as || inp.split(' ')[2] || 's';
       if (typeof as !== 'string' || !['a', 'd', 's'].includes(as)) {
-        logger.log('invalid position to join `Nas`', 2);
+        res = {
+          ok: false,
+          msg: 'invalid position to join `Nas`',
+        };
         break main;
       }
 
@@ -2031,7 +2053,10 @@ Binmat basics:\`S https://binm.\`Sat/tutorial_index\`
       }
     } else if (inp === 'view') {
       if (!game) {
-        logger.log('You are not in a game or lobby', 4);
+        res = {
+          ok: false,
+          msg: 'You are not in a game or lobby',
+        };
         break main;
       }
 
@@ -2050,20 +2075,26 @@ Binmat basics:\`S https://binm.\`Sat/tutorial_index\`
         .map((el) => el.id);
 
       if (is.length === 0) {
-        logger.log('you are not a player in this game, you cannot submit ops', 4);
+        res = {
+          ok: false,
+          msg: 'you are not a player in this game, you cannot submit ops',
+        };
         break main;
       }
 
       if (is.length > 1 && !args.as) {
-        logger.log(
-          'You are playing multiple positions in this game, please specify `Nas` who you want to view',
-          4
-        );
+        res = {
+          ok: false,
+          msg: 'You are playing multiple positions in this game, please specify `Nas` who you want to view',
+        };
         break main;
       }
 
       if (args.as && !is.includes(args.as)) {
-        logger.log('You are not playing this position', 4);
+        res = {
+          ok: false,
+          msg: 'You are not playing this position',
+        };
         break main;
       }
 
@@ -2077,7 +2108,10 @@ Binmat basics:\`S https://binm.\`Sat/tutorial_index\`
       res = { ok: true, msg: renderBoard(game.state, _as) };
     } else if (inp === 'lobby') {
       if (!game) {
-        logger.log('You are not in a game or lobby', 4);
+        res = {
+          ok: false,
+          msg: 'You are not in a game or lobby',
+        };
         break main;
       }
 
@@ -2094,14 +2128,21 @@ Binmat basics:\`S https://binm.\`Sat/tutorial_index\`
       if (game.status === 'ongoing') {
         logger.log('leaving ongoing game', 4);
       }
+      res = { ok: true };
       userdata.current = null;
     } else {
       if (!game) {
-        logger.log('You are not in a game or lobby', 4);
+        res = {
+          ok: false,
+          msg: 'You are not in a game or lobby',
+        };
         break main;
       }
       if (game.status !== 'ongoing') {
-        logger.log('You are not in an ongoing game or lobby', 4);
+        res = {
+          ok: false,
+          msg: 'You are not in an ongoing game or lobby',
+        };
         break main;
       }
       if (!game.players) {
@@ -2117,20 +2158,26 @@ Binmat basics:\`S https://binm.\`Sat/tutorial_index\`
         .map((el) => el.id);
 
       if (is.length === 0) {
-        logger.log('you are not a player in this game, you cannot submit ops', 4);
+        res = {
+          ok: false,
+          msg: 'you are not a player in this game, you cannot submit ops',
+        };
         break main;
       }
 
       if (is.length > 1 && !args.as) {
-        logger.log(
-          'You are playing multiple positions in this game, please specify `Nas` who you want to submit',
-          4
-        );
+        res = {
+          ok: false,
+          msg: 'You are playing multiple positions in this game, please specify `Nas` who you want to submit',
+        };
         break main;
       }
 
       if (args.as && !is.includes(args.as)) {
-        logger.log('You are not playing this position', 4);
+        res = {
+          ok: false,
+          msg: 'You are not playing this position',
+        };
         break main;
       }
 
@@ -2144,7 +2191,10 @@ Binmat basics:\`S https://binm.\`Sat/tutorial_index\`
       let r = queueOp(inp as operation, _as, game as Game);
 
       if (r === false) break main;
-      res = { ok: true, msg: 'submitted.' };
+      res = {
+        ok: true,
+        msg: renderBoard(game.state, _as) + '\nqueued: \n' + JSON.stringify(game.queuedOps),
+      };
     }
   } catch (e) {
     return e.message + '\n' + e.stack + '\n\n' + logger.getLogOnLevel(6);
