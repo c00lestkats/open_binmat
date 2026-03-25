@@ -16,6 +16,7 @@ The placeholders in the above diagram are labeled as follows:
   - `T` = team (`d` or `a`)
   - `P` = player index (`0` - `f`)
   - Examples: `d0`, `a0`, etc.
+  - If a binlog entry spans multiple lines, `TP` is replaced with `` `n--` ``
 - `OP` is the op made by the player.
   - Invalid ops become `` `n--` ``
 - `CONSEQUENCES` is the description of events that happen as a result of the op.
@@ -49,12 +50,17 @@ The binlog is outputted to BINMAT brains as a list, separated by newlines.
   - `T` = team (`d` or `a`)
   - `P` = player index (`0` - `f`)
   - Examples: `d0`, `a0`, etc
+  - If a binlog entry spans multiple lines, `TP` is replaced with `` `n--` ``
 - `CONSEQUENCES` is the description of events that happen as a result of the op
   - This will look different depending on the op
 
 ### Drawing (`dN`)
 
 Drawing has the following forms:
+
+> [!NOTE]
+> If more than one card is drawn, the cards are all shown in the consequence, separated by spaces.
+> For example: `... / X X ha0`
 
 #### Face-down deck
 
@@ -68,15 +74,9 @@ TP dN / X hTP
 TP dN / CA hTP
 ```
 
-#### Notes
-
-If more than one card is drawn, the cards are all shown in the consequence, separated by spaces.
-
-For example: `... / X X ha0`
-
 ### Playing
 
-Playing a card has the following forms
+Playing a card has the following forms:
 
 #### Face-down (`pCL`)
 
@@ -92,7 +92,11 @@ TP OP / CA TL
 
 ### Discarding (`xCL`)
 
-Discarding has the following forms
+Discarding has the following forms:
+
+> [!NOTE]
+> When multiple cards are being discarded, it is shown similar to drawing,
+> with all cards shown space-separated.
 
 #### General
 
@@ -109,3 +113,48 @@ aP OP / CA xa / X X haP
 ### Combat (`cL`)
 
 This one's _fun_.
+
+Combat always spans multiple lines, with the combat information actually appearing on a new line, not the op line.
+
+The "structure" for combat in the binlog is:
+
+```txt
+TP OP
+TP cL / AS / DS
+TP [MODIFIERS (@, ?)]
+TP ASP DSP DMG / [CONSEQUENCES]
+```
+
+- `AS` and `DS` are attacker and defender stack contents respectively
+- `MODIFIERS` will differ based on the modifier, outlined below, and appear in order of resolution
+  - The WILD (`*`) and BREAK (`>`) modifiers have no special entry in the binlog, only modifying combat evaluation.
+- `ASP` and `DSP` are attacker and defender stack power respectively
+- `DMG` is damage dealt by attacker
+- `CONSEQUENCES` will have generally have multiple "segments" in it, appearing in the order of with they are resolved.
+  - This will typically have the attacker stack discarded, then the results of damage being dealt
+    - Damage is first dealt to the opposing defender stack, and then the lane deck behind it.
+    - Damage to the opposing stack appears in `CONSEQUENCES` as cards in that stack being sent to `xa`
+    - Damage to a lane deck appears in `CONSEQUENCES` as cards being drawn from the lane deck.
+  - If the defender stack has more power than the attacker stack (or it's a bounce), the only consequence will be the discarding of the attacker stack.
+
+#### TRAP (`@`)
+
+The resolution of a trap is as follows:
+
+```txt
+TP T@ / CA xN
+```
+
+Where `CONSEQUENCES` is a discard.
+
+All traps being resolved appear in the same line, showing as multiple cards being discarded.
+
+#### BOUNCE (`?`)
+
+The bounce resolution appears in the binlog as the bounce being discarded.
+
+It also appears directly before the combat summary, as it is evaluated last.
+
+```txt
+TP T? / ?A xN
+```
