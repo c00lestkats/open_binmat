@@ -22,7 +22,7 @@ The placeholders in the above diagram are labeled as follows:
 - `CONSEQUENCES` is the description of events that happen as a result of the op.
   - This will look different depending on the op.
 
-The binlog is outputted to BINMAT brains as a list, separated by newlines, with no coloring syntax.
+The binlog is outputted to BINMAT brains as a list, separated by newlines.
 
 ## Ops, consequences, and you
 
